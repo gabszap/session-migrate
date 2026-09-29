@@ -6,19 +6,19 @@ This document provides a clean-room technical specification of the session stora
 
 ## 1. Pinned Host Environment & Binary Artifacts
 
-All findings were empirically derived from isolated test environments against the official macOS distribution of Antigravity Desktop:
+All findings were empirically derived from isolated test environments and installer package analysis across the official distributions of Antigravity Desktop 2.18.1:
 
-| Component | Pinned Specification |
-|---|---|
-| **App Bundle** | `/Applications/Antigravity.app` |
-| **App Version** | `2.17.0` (`CFBundleShortVersionString`), `2.18.1` (`package.json`) |
-| **Language Server Binary** | `/Applications/Antigravity.app/Contents/Resources/bin/language_server` |
-| **Language Server Size** | `148,990,608` bytes |
-| **Language Server SHA-256** | `300ee20f3108a511be1149602b91ba84cbbdcc42213067151e255584129be30f` |
-| **Language Server Build CL** | `CL 989808170` |
-| **Platform Target** | `darwin-arm64` (Apple Silicon) |
-| **Conversation Storage** | `~/.gemini/antigravity/conversations/<conversation_uuid>.db` |
-| **Summary & Index Store** | `~/.gemini/antigravity/conversation_summaries.db` (`PRAGMA user_version = 3`) |
+| Platform | Installer / Package | Language Server Binary | Size (bytes) | SHA-256 |
+|---|---|---|---|---|
+| **macOS (arm64)** | DMG (`Antigravity.app`) | `Contents/Resources/bin/language_server` | `148,990,608` | `300ee20f3108a511be1149602b91ba84cbbdcc42213067151e255584129be30f` |
+| **Linux (x64)** | `Antigravity.tar.gz` | `<install>/resources/bin/language_server` | `181,432,528` | `ab4937445fa3817bc374a1db71062de7daecdb093cbfb6bd36b80f443198670e` |
+| **Windows (x64)** | NSIS (`Antigravity-x64.exe`) | `<install>\resources\bin\language_server.exe` | `163,640,320` | `1ed84e6a1d1e51064d80c9f382ab3a519eb2775cb91d552c63064a18cfdf3cf2` |
+
+- **App Version**: `2.18.1` (`package.json`, `dist/main.js`), Electron `44.3.0`.
+- **Application Data Directory**: `<home>/.gemini/antigravity` across all platforms.
+- **Conversation Storage**: `<home>/.gemini/antigravity/conversations/<conversation_uuid>.db`
+- **Summary & Index Store**: `<home>/.gemini/antigravity/conversation_summaries.db` (`PRAGMA user_version = 3`)
+- **Shared JavaScript**: Static package analysis confirms `resources/app.asar` (SHA-256 `3c03ce352dc3c1b43f357c27ead1f73c74d198a8ded89b1b3d6a2539e7a6ac5c`) is byte-identical across all three installers, sharing the same `languageServer.js` launcher and arguments across `darwin`, `linux`, and `win32`.
 
 No vendor binaries, proprietary descriptors, or user conversation logs are reproduced in this repository; all schema definitions were established through clean-room differential probing and synthetic round-trip verification.
 
@@ -26,13 +26,12 @@ No vendor binaries, proprietary descriptors, or user conversation logs are repro
 
 - **Database & Wire Protocol (Cross-Platform)**: The SQLite schemas (`conversations/<uuid>.db`, `conversation_summaries.db`), Protobuf wire serialization, UUID structures, and RFC 3339 timestamps are OS-agnostic and identical across macOS, Linux, and Windows.
 - **macOS (`darwin-arm64`)**: Fully verified and validated end-to-end. Includes live language server subprocess execution, Connect-RPC verification (`GetCascadeTrajectorySteps`), and sidebar discovery validation.
-- **Linux & Windows (Assumed Consistent, Pending Live Verification)**:
+- **Linux & Windows**:
   - Standard Electron path resolution is implemented:
     - User configuration & `app_storage.json`: Linux uses `$XDG_CONFIG_HOME/Antigravity` (default `~/.config/Antigravity`); Windows uses `%APPDATA%\Antigravity`.
-    - Language server binary: Linux defaults to `/opt/Antigravity/resources/bin/language_server`; Windows defaults to `%LOCALAPPDATA%\Programs\Antigravity\resources\bin\language_server.exe`.
-  - Static package analysis confirms `app.asar` (SHA-256 `3c03ce35…e7a6ac5c`) is identical across macOS and Linux, sharing the same `languageServer.js` launcher and arguments across `darwin`, `linux`, and `win32`.
-  - Linux x86_64 binary metrics observed: `181,432,528` bytes, SHA-256 `ab493744…3198670e`.
-  - Native binary oracle hash validation is currently pinned to macOS ARM64; running the native oracle against Linux or Windows binaries requires `SESSION_MIGRATE_UNVALIDATED_DESKTOP_BIN=1` until official vendor binary digests for those platforms are contributed.
+    - Language server binary: Linux searches PATH, common `/opt/Antigravity/resources/bin/language_server`, and `~/.local/share/`; Windows searches `%LOCALAPPDATA%\Programs\antigravity\resources\bin\language_server.exe` and `%PROGRAMFILES%`.
+  - All three platforms are pinned by exact file size and SHA-256 checksum in `PINNED_DESKTOP_SPECS`.
+  - Live native oracle execution on Linux/Windows remains pending live installation confirmation, but binary verification and path resolution are active for all three platforms.
 
 ---
 

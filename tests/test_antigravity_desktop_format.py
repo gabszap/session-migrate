@@ -415,11 +415,19 @@ def test_verify_pinned_desktop_platform_guards(tmp_path: Path) -> None:
     fake_bin = tmp_path / "language_server"
     fake_bin.write_bytes(b"x" * antigravity_desktop.PINNED_ANTIGRAVITY_DESKTOP_MACOS_ARM64_SIZE)
 
-    # Non-darwin should raise explicit error without unvalidated bypass
-    with pytest.raises(SessionMigrateError, match="currently pinned to macOS arm64"):
+    # Size mismatch on Linux because fake_bin has macOS size
+    with pytest.raises(SessionMigrateError, match="binary size mismatch on linux"):
         antigravity_desktop.verify_pinned_desktop(
             fake_bin,
             platform="linux",
+            environ={},
+        )
+
+    # Unsupported platform raises clear message
+    with pytest.raises(SessionMigrateError, match="not supported on freebsd"):
+        antigravity_desktop.verify_pinned_desktop(
+            fake_bin,
+            platform="freebsd",
             environ={},
         )
 

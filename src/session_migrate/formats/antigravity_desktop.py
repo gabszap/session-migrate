@@ -72,23 +72,53 @@ from session_migrate.jsonl import write_private_atomic
 from session_migrate.model import AgentFormat, EventKind, Role, Session
 
 PINNED_ANTIGRAVITY_DESKTOP_VERSION = "2.18.1"
+
+# macOS arm64
 PINNED_ANTIGRAVITY_DESKTOP_MACOS_ARM64_SHA256 = (
     "300ee20f3108a511be1149602b91ba84cbbdcc42213067151e255584129be30f"
 )
 PINNED_ANTIGRAVITY_DESKTOP_MACOS_ARM64_SIZE = 148_990_608
+
+# Linux x64
+PINNED_ANTIGRAVITY_DESKTOP_LINUX_X64_SHA256 = (
+    "ab4937445fa3817bc374a1db71062de7daecdb093cbfb6bd36b80f443198670e"
+)
+PINNED_ANTIGRAVITY_DESKTOP_LINUX_X64_SIZE = 181_432_528
+
+# Windows x64
+PINNED_ANTIGRAVITY_DESKTOP_WINDOWS_X64_SHA256 = (
+    "1ed84e6a1d1e51064d80c9f382ab3a519eb2775cb91d552c63064a18cfdf3cf2"
+)
+PINNED_ANTIGRAVITY_DESKTOP_WINDOWS_X64_SIZE = 163_640_320
+
+PINNED_DESKTOP_SPECS: dict[str, tuple[int, str]] = {
+    "darwin": (
+        PINNED_ANTIGRAVITY_DESKTOP_MACOS_ARM64_SIZE,
+        PINNED_ANTIGRAVITY_DESKTOP_MACOS_ARM64_SHA256,
+    ),
+    "linux": (
+        PINNED_ANTIGRAVITY_DESKTOP_LINUX_X64_SIZE,
+        PINNED_ANTIGRAVITY_DESKTOP_LINUX_X64_SHA256,
+    ),
+    "win32": (
+        PINNED_ANTIGRAVITY_DESKTOP_WINDOWS_X64_SIZE,
+        PINNED_ANTIGRAVITY_DESKTOP_WINDOWS_X64_SHA256,
+    ),
+}
 
 DEFAULT_MACOS_LANGUAGE_SERVER_PATH = Path(
     "/Applications/Antigravity.app/Contents/Resources/bin/language_server"
 )
 DEFAULT_LINUX_LANGUAGE_SERVER_PATH = Path("/opt/Antigravity/resources/bin/language_server")
 DEFAULT_WINDOWS_LANGUAGE_SERVER_PATH = Path(
-    "Programs/Antigravity/resources/bin/language_server.exe"
+    "Programs/antigravity/resources/bin/language_server.exe"
 )
 
 
 def default_language_server_path(
     platform: str | None = None,
     environ: Mapping[str, str] | None = None,
+    home: Path | None = None,
 ) -> Path:
     """Resolve the default language server binary path for the target platform.
 
@@ -106,21 +136,41 @@ def default_language_server_path(
     if current_platform == "win32":
         local_app_data = env.get("LOCALAPPDATA")
         if local_app_data:
-            candidate = Path(local_app_data) / DEFAULT_WINDOWS_LANGUAGE_SERVER_PATH
-            if candidate.is_file():
-                return candidate
+            for sub in (
+                "Programs/antigravity",
+                "Programs/Antigravity",
+                "programs/antigravity",
+                "programs/Antigravity",
+            ):
+                candidate = Path(local_app_data) / sub / "resources" / "bin" / "language_server.exe"
+                if candidate.is_file():
+                    return candidate
         prog_files = env.get("PROGRAMFILES")
         if prog_files:
-            candidate = (
-                Path(prog_files) / "Antigravity" / "resources" / "bin" / "language_server.exe"
-            )
-            if candidate.is_file():
-                return candidate
+            for sub in ("antigravity", "Antigravity"):
+                candidate = Path(prog_files) / sub / "resources" / "bin" / "language_server.exe"
+                if candidate.is_file():
+                    return candidate
         if local_app_data:
             return Path(local_app_data) / DEFAULT_WINDOWS_LANGUAGE_SERVER_PATH
-        return Path("C:\\Program Files\\Antigravity\\resources\\bin\\language_server.exe")
+        return Path("C:\\Program Files\\antigravity\\resources\\bin\\language_server.exe")
 
-    # Linux / other Unix
+    # Linux / other Unix: check PATH launcher, then common installation directories
+    launcher = shutil.which("antigravity", path=env.get("PATH"))
+    if launcher:
+        cand = Path(launcher).resolve().parent / "resources" / "bin" / "language_server"
+        if cand.is_file():
+            return cand
+    user_home = (home or Path.home()).expanduser()
+    for cand in (
+        Path("/opt/Antigravity/resources/bin/language_server"),
+        Path("/opt/antigravity/resources/bin/language_server"),
+        user_home / ".local/share/Antigravity/resources/bin/language_server",
+        user_home / ".local/share/antigravity/resources/bin/language_server",
+        Path("/usr/lib/antigravity/resources/bin/language_server"),
+    ):
+        if cand.is_file():
+            return cand
     return DEFAULT_LINUX_LANGUAGE_SERVER_PATH
 
 
@@ -406,23 +456,24 @@ def verify_pinned_desktop(
     if values.get("SESSION_MIGRATE_UNVALIDATED_DESKTOP_BIN") == "1":
         return path
 
-    if current_platform != "darwin":
+    if current_platform not in PINNED_DESKTOP_SPECS:
         raise SessionMigrateError(
-            "Antigravity Desktop native binary verification is currently pinned to macOS arm64 "
-            f"({PINNED_ANTIGRAVITY_DESKTOP_VERSION}); Linux and Windows binary hashes have not "
-            "yet been pinned. "
+            f"Antigravity Desktop native binary verification is not supported on "
+            f"{current_platform}; supported platforms are darwin, linux, win32. "
             "Set SESSION_MIGRATE_UNVALIDATED_DESKTOP_BIN=1 to proceed with an unvalidated binary."
         )
 
-    if info.st_size != PINNED_ANTIGRAVITY_DESKTOP_MACOS_ARM64_SIZE:
+    expected_size, expected_digest = PINNED_DESKTOP_SPECS[current_platform]
+    if info.st_size != expected_size:
         raise SessionMigrateError(
-            "Antigravity Desktop binary size mismatch: automatic import requires the exact "
-            f"macOS arm64 {PINNED_ANTIGRAVITY_DESKTOP_VERSION} build"
+            f"Antigravity Desktop binary size mismatch on {current_platform}: expected "
+            f"{expected_size} bytes, observed {info.st_size}"
         )
-    digest = _stream_sha256(path, maximum=PINNED_ANTIGRAVITY_DESKTOP_MACOS_ARM64_SIZE)
-    if digest != PINNED_ANTIGRAVITY_DESKTOP_MACOS_ARM64_SHA256:
+    digest = _stream_sha256(path, maximum=expected_size)
+    if digest != expected_digest:
         raise SessionMigrateError(
-            "Antigravity Desktop binary digest mismatch; refusing private-store installation"
+            f"Antigravity Desktop binary digest mismatch on {current_platform}; "
+            "refusing private-store installation"
         )
     return path
 
