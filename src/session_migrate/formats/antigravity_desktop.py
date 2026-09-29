@@ -24,6 +24,7 @@ import os
 import shutil
 import sqlite3
 import stat
+import sys
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import replace
@@ -79,6 +80,79 @@ PINNED_ANTIGRAVITY_DESKTOP_MACOS_ARM64_SIZE = 148_990_608
 DEFAULT_MACOS_LANGUAGE_SERVER_PATH = Path(
     "/Applications/Antigravity.app/Contents/Resources/bin/language_server"
 )
+DEFAULT_LINUX_LANGUAGE_SERVER_PATH = Path("/opt/Antigravity/resources/app/bin/language_server")
+DEFAULT_WINDOWS_LANGUAGE_SERVER_PATH = Path(
+    "Programs/Antigravity/resources/app/bin/language_server.exe"
+)
+
+
+def default_language_server_path(
+    platform: str | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> Path:
+    """Resolve the default language server binary path for the target platform.
+
+    Can be overridden via the ``SESSION_MIGRATE_ANTIGRAVITY_DESKTOP_BIN``
+    environment variable.
+    """
+    env = os.environ if environ is None else environ
+    override = env.get("SESSION_MIGRATE_ANTIGRAVITY_DESKTOP_BIN")
+    if override:
+        return Path(override).expanduser()
+
+    current_platform = sys.platform if platform is None else platform
+    if current_platform == "darwin":
+        return DEFAULT_MACOS_LANGUAGE_SERVER_PATH
+    if current_platform == "win32":
+        local_app_data = env.get("LOCALAPPDATA")
+        if local_app_data:
+            candidate = Path(local_app_data) / DEFAULT_WINDOWS_LANGUAGE_SERVER_PATH
+            if candidate.is_file():
+                return candidate
+        prog_files = env.get("PROGRAMFILES")
+        if prog_files:
+            candidate = (
+                Path(prog_files)
+                / "Antigravity"
+                / "resources"
+                / "app"
+                / "bin"
+                / "language_server.exe"
+            )
+            if candidate.is_file():
+                return candidate
+        if local_app_data:
+            return Path(local_app_data) / DEFAULT_WINDOWS_LANGUAGE_SERVER_PATH
+        return Path("C:\\Program Files\\Antigravity\\resources\\app\\bin\\language_server.exe")
+
+    # Linux / other Unix
+    return DEFAULT_LINUX_LANGUAGE_SERVER_PATH
+
+
+def electron_user_data_dir(
+    platform: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: Path | None = None,
+) -> Path:
+    """Return the Electron userData directory where app_storage.json resides."""
+    env = os.environ if environ is None else environ
+    current_platform = sys.platform if platform is None else platform
+    user_home = (home or Path.home()).expanduser()
+
+    if current_platform == "darwin":
+        return user_home / "Library" / "Application Support" / "Antigravity"
+    if current_platform == "win32":
+        app_data = env.get("APPDATA")
+        if app_data:
+            return Path(app_data) / "Antigravity"
+        return user_home / "AppData" / "Roaming" / "Antigravity"
+
+    # Linux / XDG standard
+    xdg_config = env.get("XDG_CONFIG_HOME")
+    if xdg_config:
+        return Path(xdg_config) / "Antigravity"
+    return user_home / ".config" / "Antigravity"
+
 
 MAX_NATIVE_BYTES = antigravity.MAX_NATIVE_BYTES
 PROJECT_ID = antigravity.PROJECT_ID_DESKTOP  # "outside-of-project"
@@ -302,19 +376,25 @@ def native_record_count(data: bytes) -> int:
 
 
 def verify_pinned_desktop(
-    executable: Path | None = None, *, environ: Mapping[str, str] | None = None
+    executable: Path | None = None,
+    *,
+    platform: str | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> Path:
     """Resolve and verify the Antigravity Desktop language server binary."""
     values = dict(os.environ if environ is None else environ)
+    current_platform = sys.platform if platform is None else platform
     candidate: str | None = None
     if executable:
         candidate = str(executable)
+    elif values.get("SESSION_MIGRATE_ANTIGRAVITY_DESKTOP_BIN"):
+        candidate = values["SESSION_MIGRATE_ANTIGRAVITY_DESKTOP_BIN"]
     elif values.get("ANTIGRAVITY_DESKTOP_BIN"):
         candidate = values["ANTIGRAVITY_DESKTOP_BIN"]
     elif values.get("ANTIGRAVITY_LANGUAGE_SERVER_BIN"):
         candidate = values["ANTIGRAVITY_LANGUAGE_SERVER_BIN"]
-    elif DEFAULT_MACOS_LANGUAGE_SERVER_PATH.is_file():
-        candidate = str(DEFAULT_MACOS_LANGUAGE_SERVER_PATH)
+    elif default_language_server_path(platform=current_platform, environ=values).is_file():
+        candidate = str(default_language_server_path(platform=current_platform, environ=values))
     else:
         candidate = shutil.which("language_server", path=values.get("PATH"))
 
@@ -330,6 +410,14 @@ def verify_pinned_desktop(
 
     if values.get("SESSION_MIGRATE_UNVALIDATED_DESKTOP_BIN") == "1":
         return path
+
+    if current_platform != "darwin":
+        raise SessionMigrateError(
+            "Antigravity Desktop native binary verification is currently pinned to macOS arm64 "
+            f"({PINNED_ANTIGRAVITY_DESKTOP_VERSION}); Linux and Windows binary hashes have not "
+            "yet been pinned. "
+            "Set SESSION_MIGRATE_UNVALIDATED_DESKTOP_BIN=1 to proceed with an unvalidated binary."
+        )
 
     if info.st_size != PINNED_ANTIGRAVITY_DESKTOP_MACOS_ARM64_SIZE:
         raise SessionMigrateError(

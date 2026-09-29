@@ -22,6 +22,17 @@ All findings were empirically derived from isolated test environments against th
 
 No vendor binaries, proprietary descriptors, or user conversation logs are reproduced in this repository; all schema definitions were established through clean-room differential probing and synthetic round-trip verification.
 
+### Platform Support Status
+
+- **Database & Wire Protocol (Cross-Platform)**: The SQLite schemas (`conversations/<uuid>.db`, `conversation_summaries.db`), Protobuf wire serialization, UUID structures, and RFC 3339 timestamps are OS-agnostic and identical across macOS, Linux, and Windows.
+- **macOS (`darwin-arm64`)**: Fully verified and validated end-to-end. Includes live language server subprocess execution, Connect-RPC verification (`GetCascadeTrajectorySteps`), and sidebar discovery validation.
+- **Linux & Windows (Assumed Consistent, Pending Live Verification)**:
+  - Standard Electron path resolution is implemented:
+    - User configuration & `app_storage.json`: Linux uses `$XDG_CONFIG_HOME/Antigravity` (default `~/.config/Antigravity`); Windows uses `%APPDATA%\Antigravity`.
+    - Language server binary: Linux defaults to `/opt/Antigravity/resources/app/bin/language_server`; Windows defaults to `%LOCALAPPDATA%\Programs\Antigravity\resources\app\bin\language_server.exe`.
+  - Storage structures and database formats are assumed identical due to shared upstream Go/Electron codebases.
+  - Native binary oracle hash validation is currently pinned exclusively to macOS ARM64; running the native oracle against Linux or Windows binaries requires `SESSION_MIGRATE_UNVALIDATED_DESKTOP_BIN=1` until official vendor binary digests for those platforms are contributed.
+
 ---
 
 ## 2. Desktop vs CLI Architectural Differences

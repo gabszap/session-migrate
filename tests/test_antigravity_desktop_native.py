@@ -16,7 +16,14 @@ TRAJECTORY_ID = "dddddddd-eeee-4fff-8000-111111111111"
 
 
 def exact_desktop_binary() -> Path:
-    binary = antigravity_desktop.DEFAULT_MACOS_LANGUAGE_SERVER_PATH
+    import sys
+
+    if sys.platform != "darwin":
+        pytest.skip(
+            "Antigravity Desktop native language server test is currently pinned and verified "
+            "for macOS; Linux and Windows binary verification is pending"
+        )
+    binary = antigravity_desktop.default_language_server_path()
     if not binary.is_file():
         pytest.skip("Antigravity Desktop language_server is not installed on this machine")
     try:

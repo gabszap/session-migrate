@@ -335,3 +335,98 @@ def test_conversion_pipeline_cli_to_desktop_and_back(tmp_path: Path) -> None:
     )
     assert cli_artifact.target_format == TargetFormat.ANTIGRAVITY
     assert cli_artifact.native_record_count == artifact.native_record_count
+
+
+def test_default_language_server_path_platform_matrix(tmp_path: Path) -> None:
+    # 1. Environment override
+    custom_bin = tmp_path / "custom_server"
+    resolved = antigravity_desktop.default_language_server_path(
+        platform="darwin",
+        environ={"SESSION_MIGRATE_ANTIGRAVITY_DESKTOP_BIN": str(custom_bin)},
+    )
+    assert resolved == custom_bin
+
+    # 2. Darwin default
+    resolved_mac = antigravity_desktop.default_language_server_path(
+        platform="darwin",
+        environ={},
+    )
+    assert resolved_mac == antigravity_desktop.DEFAULT_MACOS_LANGUAGE_SERVER_PATH
+
+    # 3. Linux default
+    resolved_linux = antigravity_desktop.default_language_server_path(
+        platform="linux",
+        environ={},
+    )
+    assert resolved_linux == antigravity_desktop.DEFAULT_LINUX_LANGUAGE_SERVER_PATH
+
+    # 4. Windows default with LOCALAPPDATA
+    resolved_win = antigravity_desktop.default_language_server_path(
+        platform="win32",
+        environ={"LOCALAPPDATA": "C:\\Users\\tester\\AppData\\Local"},
+    )
+    assert "language_server.exe" in str(resolved_win)
+
+
+def test_electron_user_data_dir_platform_matrix(tmp_path: Path) -> None:
+    fake_home = tmp_path / "fakehome"
+
+    # Darwin
+    mac_dir = antigravity_desktop.electron_user_data_dir(
+        platform="darwin",
+        home=fake_home,
+    )
+    assert mac_dir == fake_home / "Library" / "Application Support" / "Antigravity"
+
+    # Windows with APPDATA
+    win_dir = antigravity_desktop.electron_user_data_dir(
+        platform="win32",
+        environ={"APPDATA": "C:\\Users\\tester\\AppData\\Roaming"},
+        home=fake_home,
+    )
+    assert win_dir == Path("C:\\Users\\tester\\AppData\\Roaming") / "Antigravity"
+
+    # Windows fallback
+    win_fallback = antigravity_desktop.electron_user_data_dir(
+        platform="win32",
+        environ={},
+        home=fake_home,
+    )
+    assert win_fallback == fake_home / "AppData" / "Roaming" / "Antigravity"
+
+    # Linux with XDG_CONFIG_HOME
+    linux_xdg = antigravity_desktop.electron_user_data_dir(
+        platform="linux",
+        environ={"XDG_CONFIG_HOME": "/tmp/custom_config"},
+        home=fake_home,
+    )
+    assert linux_xdg == Path("/tmp/custom_config/Antigravity")
+
+    # Linux default fallback
+    linux_fallback = antigravity_desktop.electron_user_data_dir(
+        platform="linux",
+        environ={},
+        home=fake_home,
+    )
+    assert linux_fallback == fake_home / ".config" / "Antigravity"
+
+
+def test_verify_pinned_desktop_platform_guards(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "language_server"
+    fake_bin.write_bytes(b"x" * antigravity_desktop.PINNED_ANTIGRAVITY_DESKTOP_MACOS_ARM64_SIZE)
+
+    # Non-darwin should raise explicit error without unvalidated bypass
+    with pytest.raises(SessionMigrateError, match="currently pinned to macOS arm64"):
+        antigravity_desktop.verify_pinned_desktop(
+            fake_bin,
+            platform="linux",
+            environ={},
+        )
+
+    # With SESSION_MIGRATE_UNVALIDATED_DESKTOP_BIN=1, it should accept the path
+    bypassed = antigravity_desktop.verify_pinned_desktop(
+        fake_bin,
+        platform="linux",
+        environ={"SESSION_MIGRATE_UNVALIDATED_DESKTOP_BIN": "1"},
+    )
+    assert bypassed == fake_bin.resolve()
