@@ -12,7 +12,7 @@ here. Native format compatibility is documented separately in
   sidebar discovery, and verified native Go language server integration.
 - Document the clean-room Antigravity Desktop storage architecture, Protobuf
   wire formats, Connect-RPC interfaces, and collision invariants in
-  `docs/antigravity-desktop-interoperability.md`.
+  `docs/antigravity-desktop-format.md`.
 
 ## 0.11.0 - 2026-09-11
 

@@ -263,7 +263,7 @@ Antigravity Desktop's Electron frontend communicates with the background Go nati
 ### 6.1 Invocation Arguments
 
 ```bash
-/Applications/Antigravity.app/Contents/Resources/bin/language_server \
+<install>/resources/bin/language_server \
   --standalone \
   --override_ide_name antigravity \
   --subclient_type hub \
@@ -271,10 +271,16 @@ Antigravity Desktop's Electron frontend communicates with the background Go nati
   --override_user_agent_name antigravity \
   --https_server_port 0 \
   --csrf_token <session_csrf_token> \
-  -gemini_dir ~/.gemini \
-  -app_data_dir antigravity
+  --app_data_dir antigravity \
+  --api_server_url https://generativelanguage.googleapis.com \
+  --cloud_code_endpoint https://daily-cloudcode-pa.googleapis.com \
+  --enable_sidecars
 ```
 
+Key flags observed from package analysis:
+- `--app_data_dir antigravity`: Critical. The binary's internal default is `antigravity-ide`; passing `antigravity` directs it to `<home>/.gemini/antigravity`.
+- `--override_ide_name antigravity` and `--subclient_type hub`: Required. In this mode, the server manages `agyhub_summaries_proto.pb` and project catalogs.
+- `-gemini_dir <path>`: The Electron launcher omits this flag (defaulting to `<home>/.gemini`), but the binary accepts it when running isolated test sandboxes.
 - When `--https_server_port 0` is passed, the server binds to a random loopback port and logs:
   `Language server listening on random port at <PORT> for HTTPS (gRPC)`
 - The server expects `stdin` to be closed immediately upon spawn (unless in WSL liveness mode).
