@@ -6,7 +6,7 @@ here. Native format compatibility is documented separately in
 
 ## Unreleased
 
-- Add first-class support for Antigravity Desktop (macOS/Electron) 2.17.0/2.18.1
+- Add first-class support for Antigravity Desktop (macOS/Electron) 2.18.1
   with bidirectional conversion, SQLite schema adaptation, Hub Summaries
   Protobuf cache synchronization (`agyhub_summaries_proto.pb`), project-scoped
   sidebar discovery, and verified native Go language server integration.
