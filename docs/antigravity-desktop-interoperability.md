@@ -29,9 +29,10 @@ No vendor binaries, proprietary descriptors, or user conversation logs are repro
 - **Linux & Windows (Assumed Consistent, Pending Live Verification)**:
   - Standard Electron path resolution is implemented:
     - User configuration & `app_storage.json`: Linux uses `$XDG_CONFIG_HOME/Antigravity` (default `~/.config/Antigravity`); Windows uses `%APPDATA%\Antigravity`.
-    - Language server binary: Linux defaults to `/opt/Antigravity/resources/app/bin/language_server`; Windows defaults to `%LOCALAPPDATA%\Programs\Antigravity\resources\app\bin\language_server.exe`.
-  - Storage structures and database formats are assumed identical due to shared upstream Go/Electron codebases.
-  - Native binary oracle hash validation is currently pinned exclusively to macOS ARM64; running the native oracle against Linux or Windows binaries requires `SESSION_MIGRATE_UNVALIDATED_DESKTOP_BIN=1` until official vendor binary digests for those platforms are contributed.
+    - Language server binary: Linux defaults to `/opt/Antigravity/resources/bin/language_server`; Windows defaults to `%LOCALAPPDATA%\Programs\Antigravity\resources\bin\language_server.exe`.
+  - Static package analysis confirms `app.asar` (SHA-256 `3c03ce35…e7a6ac5c`) is identical across macOS and Linux, sharing the same `languageServer.js` launcher and arguments across `darwin`, `linux`, and `win32`.
+  - Linux x86_64 binary metrics observed: `181,432,528` bytes, SHA-256 `ab493744…3198670e`.
+  - Native binary oracle hash validation is currently pinned to macOS ARM64; running the native oracle against Linux or Windows binaries requires `SESSION_MIGRATE_UNVALIDATED_DESKTOP_BIN=1` until official vendor binary digests for those platforms are contributed.
 
 ---
 

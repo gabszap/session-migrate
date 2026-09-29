@@ -71,7 +71,7 @@ from session_migrate.formats.antigravity import (
 from session_migrate.jsonl import write_private_atomic
 from session_migrate.model import AgentFormat, EventKind, Role, Session
 
-PINNED_ANTIGRAVITY_DESKTOP_VERSION = "2.17.0"
+PINNED_ANTIGRAVITY_DESKTOP_VERSION = "2.18.1"
 PINNED_ANTIGRAVITY_DESKTOP_MACOS_ARM64_SHA256 = (
     "300ee20f3108a511be1149602b91ba84cbbdcc42213067151e255584129be30f"
 )
@@ -80,9 +80,9 @@ PINNED_ANTIGRAVITY_DESKTOP_MACOS_ARM64_SIZE = 148_990_608
 DEFAULT_MACOS_LANGUAGE_SERVER_PATH = Path(
     "/Applications/Antigravity.app/Contents/Resources/bin/language_server"
 )
-DEFAULT_LINUX_LANGUAGE_SERVER_PATH = Path("/opt/Antigravity/resources/app/bin/language_server")
+DEFAULT_LINUX_LANGUAGE_SERVER_PATH = Path("/opt/Antigravity/resources/bin/language_server")
 DEFAULT_WINDOWS_LANGUAGE_SERVER_PATH = Path(
-    "Programs/Antigravity/resources/app/bin/language_server.exe"
+    "Programs/Antigravity/resources/bin/language_server.exe"
 )
 
 
@@ -112,18 +112,13 @@ def default_language_server_path(
         prog_files = env.get("PROGRAMFILES")
         if prog_files:
             candidate = (
-                Path(prog_files)
-                / "Antigravity"
-                / "resources"
-                / "app"
-                / "bin"
-                / "language_server.exe"
+                Path(prog_files) / "Antigravity" / "resources" / "bin" / "language_server.exe"
             )
             if candidate.is_file():
                 return candidate
         if local_app_data:
             return Path(local_app_data) / DEFAULT_WINDOWS_LANGUAGE_SERVER_PATH
-        return Path("C:\\Program Files\\Antigravity\\resources\\app\\bin\\language_server.exe")
+        return Path("C:\\Program Files\\Antigravity\\resources\\bin\\language_server.exe")
 
     # Linux / other Unix
     return DEFAULT_LINUX_LANGUAGE_SERVER_PATH
