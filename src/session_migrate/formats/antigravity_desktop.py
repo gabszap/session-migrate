@@ -1,4 +1,4 @@
-"""Antigravity Desktop 2.17.0 SQLite/protobuf session adapter.
+"""Antigravity Desktop 2.18.1 SQLite/protobuf session adapter.
 
 This module adapts conversations to and from the Antigravity Desktop application
 (macOS/Electron), which stores individual cascade conversations as SQLite databases
@@ -164,7 +164,9 @@ def default_language_server_path(
     user_home = (home or Path.home()).expanduser()
     for cand in (
         Path("/opt/Antigravity/resources/bin/language_server"),
+        Path("/opt/Antigravity-x64/resources/bin/language_server"),
         Path("/opt/antigravity/resources/bin/language_server"),
+        user_home / "Antigravity-x64/resources/bin/language_server",
         user_home / ".local/share/Antigravity/resources/bin/language_server",
         user_home / ".local/share/antigravity/resources/bin/language_server",
         Path("/usr/lib/antigravity/resources/bin/language_server"),
