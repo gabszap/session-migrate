@@ -418,34 +418,41 @@ def validate_native_bytes(data: bytes, session_id: str) -> None:
 
 
 def snapshot_database_bytes(path: Path) -> bytes:
-    """Return a bounded, transactionally consistent copy, including live WAL state."""
+    """Create a consistent SQLite snapshot and return its bytes."""
 
-    source = path.expanduser()
-    try:
-        info = source.lstat()
-    except OSError as exc:
-        raise SessionMigrateError("cannot inspect Antigravity conversation database") from exc
-    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-        raise SessionMigrateError("Antigravity conversation source must be a regular file")
-    if info.st_size > MAX_NATIVE_BYTES:
-        raise SessionMigrateError("Antigravity conversation exceeds the database safety limit")
+    path = Path(path)
+
+    if not path.is_file():
+        raise SessionMigrateError(f"Antigravity database not found: {path}")
 
     with tempfile.TemporaryDirectory(prefix="session-migrate-antigravity-snapshot-") as directory:
-        target = Path(directory) / "snapshot.db"
-        uri = f"file:{quote(str(source.resolve()), safe='/')}?mode=ro"
+        snapshot_path = Path(directory) / "snapshot.db"
+
+        source_db = None
+        snapshot_db = None
+
         try:
-            with sqlite3.connect(uri, uri=True, timeout=5) as origin:
-                origin.execute("PRAGMA trusted_schema=OFF")
-                with sqlite3.connect(target) as destination:
-                    origin.backup(destination)
-            data = target.read_bytes()
-        except (OSError, sqlite3.Error) as exc:
+            source_db = sqlite3.connect(path)
+            snapshot_db = sqlite3.connect(snapshot_path)
+
+            source_db.backup(snapshot_db)
+            snapshot_db.commit()
+
+        except sqlite3.Error as exc:
             raise SessionMigrateError(
-                "cannot make a consistent Antigravity database snapshot"
+                f"failed to snapshot Antigravity database {path}: {exc}"
             ) from exc
-    if not data or len(data) > MAX_NATIVE_BYTES:
-        raise SessionMigrateError("Antigravity database snapshot violates the safety limit")
-    return data
+
+        finally:
+            if snapshot_db is not None:
+                snapshot_db.close()
+                snapshot_db = None
+
+            if source_db is not None:
+                source_db.close()
+                source_db = None
+
+        return snapshot_path.read_bytes()
 
 
 def session_relative_path(session_id: str) -> Path:
@@ -635,6 +642,12 @@ def install_database(
                 raise SessionMigrateError("Antigravity install paths changed during transaction")
             summaries.execute("COMMIT")
     except BaseException:
+        if conversation_guard is not None:
+            os.close(conversation_guard)
+            conversation_guard = None
+        if summary_guard is not None:
+            os.close(summary_guard)
+            summary_guard = None
         if created_identity is not None:
             _unlink_if_same_file(conversation_path, created_identity)
         raise
@@ -657,70 +670,94 @@ def _build_database(
 ) -> bytes:
     with tempfile.TemporaryDirectory(prefix="session-migrate-antigravity-build-") as directory:
         path = Path(directory) / "conversation.db"
+
+        db = None
         try:
-            with sqlite3.connect(path) as db:
-                db.execute("PRAGMA journal_mode=DELETE")
-                db.executescript(
-                    """
-                    CREATE TABLE trajectory_meta (
-                      trajectory_id text, cascade_id text, trajectory_type integer, source integer,
-                      PRIMARY KEY (trajectory_id)
-                    );
-                    CREATE TABLE steps (
-                      idx integer, step_type integer NOT NULL DEFAULT 0,
-                      status integer NOT NULL DEFAULT 0,
-                      has_subtrajectory numeric NOT NULL DEFAULT false,
-                      metadata blob, error_details blob, permissions blob, task_details blob,
-                      render_info blob, step_payload blob,
-                      step_format integer NOT NULL DEFAULT 0,
-                      PRIMARY KEY (idx)
-                    );
-                    CREATE INDEX idx_steps_status ON steps(status);
-                    CREATE INDEX idx_steps_step_type ON steps(step_type);
-                    CREATE TABLE gen_metadata (
-                      idx integer, data blob, size integer NOT NULL DEFAULT 0, PRIMARY KEY (idx)
-                    );
-                    CREATE TABLE executor_metadata (idx integer, data blob, PRIMARY KEY (idx));
-                    CREATE TABLE parent_references (idx integer, data blob, PRIMARY KEY (idx));
-                    CREATE TABLE trajectory_metadata_blob (
-                      id text DEFAULT "main", data blob, PRIMARY KEY (id)
-                    );
-                    CREATE TABLE battle_mode_infos (idx integer, data blob, PRIMARY KEY (idx));
-                    """
-                )
-                db.execute(
-                    "INSERT INTO trajectory_meta VALUES(?,?,4,?)",
-                    (trajectory_id, conversation_id, source),
-                )
-                db.executemany(
-                    "INSERT INTO steps("
-                    "idx,step_type,status,has_subtrajectory,metadata,step_payload,step_format"
-                    ") VALUES(?,?,?,0,?,?,0)",
-                    [
-                        (row.index, row.step_type, row.status, row.metadata, row.payload)
-                        for row in rows
-                    ],
-                )
-                seconds = int(_parse_timestamp(started_at).timestamp())
-                trajectory_metadata = (
-                    _field_bytes(2, _field_varint(1, seconds))
-                    + _field_text(6, conversation_id)
-                    + _field_text(18, project_id)
-                )
-                db.execute(
-                    "INSERT INTO trajectory_metadata_blob(id,data) VALUES('main',?)",
-                    (trajectory_metadata,),
-                )
-                result = db.execute("PRAGMA integrity_check").fetchone()
-                if result != ("ok",):
-                    raise SessionMigrateError(
-                        "generated Antigravity database failed integrity check"
+            db = sqlite3.connect(path)
+
+            db.execute("PRAGMA journal_mode=DELETE")
+            db.executescript(
+                """
+                CREATE TABLE trajectory_meta (
+                  trajectory_id text, cascade_id text, trajectory_type integer, source integer,
+                  PRIMARY KEY (trajectory_id)
+                );
+                CREATE TABLE steps (
+                  idx integer, step_type integer NOT NULL DEFAULT 0,
+                  status integer NOT NULL DEFAULT 0,
+                  has_subtrajectory numeric NOT NULL DEFAULT false,
+                  metadata blob, error_details blob, permissions blob, task_details blob,
+                  render_info blob, step_payload blob,
+                  step_format integer NOT NULL DEFAULT 0,
+                  PRIMARY KEY (idx)
+                );
+                CREATE INDEX idx_steps_status ON steps(status);
+                CREATE INDEX idx_steps_step_type ON steps(step_type);
+                CREATE TABLE gen_metadata (
+                  idx integer, data blob, size integer NOT NULL DEFAULT 0, PRIMARY KEY (idx)
+                );
+                CREATE TABLE executor_metadata (idx integer, data blob, PRIMARY KEY (idx));
+                CREATE TABLE parent_references (idx integer, data blob, PRIMARY KEY (idx));
+                CREATE TABLE trajectory_metadata_blob (
+                  id text DEFAULT "main", data blob, PRIMARY KEY (id)
+                );
+                CREATE TABLE battle_mode_infos (idx integer, data blob, PRIMARY KEY (idx));
+                """
+            )
+
+            db.execute(
+                "INSERT INTO trajectory_meta VALUES(?,?,4,?)",
+                (trajectory_id, conversation_id, source),
+            )
+
+            db.executemany(
+                "INSERT INTO steps("
+                "idx,step_type,status,has_subtrajectory,metadata,step_payload,step_format"
+                ") VALUES(?,?,?,0,?,?,0)",
+                [
+                    (
+                        row.index,
+                        row.step_type,
+                        row.status,
+                        row.metadata,
+                        row.payload,
                     )
-            data = path.read_bytes()
+                    for row in rows
+                ],
+            )
+
+            seconds = int(_parse_timestamp(started_at).timestamp())
+
+            trajectory_metadata = (
+                _field_bytes(2, _field_varint(1, seconds))
+                + _field_text(6, conversation_id)
+                + _field_text(18, project_id)
+            )
+
+            db.execute(
+                "INSERT INTO trajectory_metadata_blob(id,data) VALUES('main',?)",
+                (trajectory_metadata,),
+            )
+
+            result = db.execute("PRAGMA integrity_check").fetchone()
+
+            if result != ("ok",):
+                raise SessionMigrateError("generated Antigravity database failed integrity check")
+
+            db.commit()
+
         except sqlite3.Error as exc:
             raise SessionMigrateError("cannot construct Antigravity conversation database") from exc
+
+        finally:
+            if db is not None:
+                db.close()
+
+        data = path.read_bytes()
+
     if not data or len(data) > MAX_NATIVE_BYTES:
         raise SessionMigrateError("generated Antigravity database violates the safety limit")
+
     return data
 
 
@@ -1655,7 +1692,15 @@ def _read_summary_metadata(path: Path, session_id: str) -> tuple[str | None, Pat
         if isinstance(uris, list) and uris and isinstance(uris[0], str):
             parsed = urlparse(uris[0])
             if parsed.scheme == "file" and not parsed.netloc:
-                cwd = Path(unquote(parsed.path))
+                raw_path = unquote(parsed.path)
+                if (
+                    os.name == "nt"
+                    and len(raw_path) >= 3
+                    and raw_path[0] == "/"
+                    and raw_path[2] == ":"
+                ):
+                    raw_path = raw_path[1:]
+                cwd = Path(raw_path)
     except (TypeError, ValueError, json.JSONDecodeError):
         pass
     return title, cwd
@@ -1692,43 +1737,50 @@ def _ensure_summary_database(path: Path) -> None:
         prefix=".session-migrate-summary-", dir=path.parent
     ) as directory:
         staged = Path(directory) / "conversation_summaries.db"
+        db = None
         try:
-            with sqlite3.connect(staged) as db:
-                db.executescript(
-                    """
-                    CREATE TABLE conversation_summaries (
-                      conversation_id text,
-                      title text NOT NULL DEFAULT "",
-                      preview text NOT NULL DEFAULT "",
-                      step_count integer NOT NULL DEFAULT 0,
-                      last_modified_time datetime NOT NULL,
-                      workspace_uris text NOT NULL,
-                      status text NOT NULL DEFAULT "",
-                      source text NOT NULL DEFAULT "",
-                      project_id text NOT NULL DEFAULT "",
-                      agent_name text NOT NULL DEFAULT "",
-                      parent_conversation_id text NOT NULL DEFAULT "",
-                      nesting_depth integer NOT NULL DEFAULT 0,
-                      battle_id text NOT NULL DEFAULT "",
-                      winning_conversation_id text NOT NULL DEFAULT "",
-                      not_fully_idle numeric NOT NULL DEFAULT false,
-                      killed numeric NOT NULL DEFAULT false,
-                      last_user_input_time datetime NOT NULL,
-                      last_user_input_step_index integer NOT NULL DEFAULT -1,
-                      app_data_dir text NOT NULL DEFAULT "",
-                      PRIMARY KEY (conversation_id)
-                    );
-                    CREATE INDEX idx_conversation_summaries_last_user_input_time
-                      ON conversation_summaries(last_user_input_time);
-                    CREATE INDEX idx_conversation_summaries_last_modified_time
-                      ON conversation_summaries(last_modified_time);
-                    """
-                )
-                if db.execute("PRAGMA integrity_check").fetchone() != ("ok",):
-                    raise SessionMigrateError("generated Antigravity summary DB failed integrity")
+            db = sqlite3.connect(staged)
+            db.executescript(
+                """
+                CREATE TABLE conversation_summaries (
+                  conversation_id text,
+                  title text NOT NULL DEFAULT "",
+                  preview text NOT NULL DEFAULT "",
+                  step_count integer NOT NULL DEFAULT 0,
+                  last_modified_time datetime NOT NULL,
+                  workspace_uris text NOT NULL,
+                  status text NOT NULL DEFAULT "",
+                  source text NOT NULL DEFAULT "",
+                  project_id text NOT NULL DEFAULT "",
+                  agent_name text NOT NULL DEFAULT "",
+                  parent_conversation_id text NOT NULL DEFAULT "",
+                  nesting_depth integer NOT NULL DEFAULT 0,
+                  battle_id text NOT NULL DEFAULT "",
+                  winning_conversation_id text NOT NULL DEFAULT "",
+                  not_fully_idle numeric NOT NULL DEFAULT false,
+                  killed numeric NOT NULL DEFAULT false,
+                  last_user_input_time datetime NOT NULL,
+                  last_user_input_step_index integer NOT NULL DEFAULT -1,
+                  app_data_dir text NOT NULL DEFAULT "",
+                  PRIMARY KEY (conversation_id)
+                );
+                CREATE INDEX idx_conversation_summaries_last_user_input_time
+                  ON conversation_summaries(last_user_input_time);
+                CREATE INDEX idx_conversation_summaries_last_modified_time
+                  ON conversation_summaries(last_modified_time);
+                """
+            )
+            if db.execute("PRAGMA integrity_check").fetchone() != ("ok",):
+                raise SessionMigrateError("generated Antigravity summary DB failed integrity")
+            db.commit()
+            db.close()
+            db = None
             data = staged.read_bytes()
         except sqlite3.Error as exc:
             raise SessionMigrateError("cannot create Antigravity summary database") from exc
+        finally:
+            if db is not None:
+                db.close()
     try:
         write_private_atomic(path, data)
     except Exception:

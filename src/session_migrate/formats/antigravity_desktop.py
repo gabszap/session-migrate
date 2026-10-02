@@ -599,6 +599,12 @@ def install_database(
                 )
             summaries.execute("COMMIT")
     except BaseException:
+        if conversation_guard is not None:
+            os.close(conversation_guard)
+            conversation_guard = None
+        if summary_guard is not None:
+            os.close(summary_guard)
+            summary_guard = None
         if created_identity is not None:
             _unlink_if_same_file(conversation_path, created_identity)
         raise
