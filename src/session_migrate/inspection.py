@@ -20,6 +20,7 @@ from session_migrate.formats import (
     kimi,
     mastracode,
     muse,
+    opencode,
     openhands,
     qwen,
     vibe,
@@ -586,6 +587,8 @@ def _inspect_opencode(
     info = value.get("info")
     messages = value.get("messages")
     assert isinstance(info, dict) and isinstance(messages, list)
+    if source_format == AgentFormat.OPENCODE and opencode.opencode_v2.is_bundle(value):
+        return _inspect_portable_database(opencode.parse_session(path))
     record_types: Counter[str] = Counter({"session": 1})
     roles: Counter[str] = Counter()
     blocks: Counter[str] = Counter()

@@ -1,0 +1,276 @@
+"""Portable v2 transfers, without native database writes or real providers."""
+
+import json
+from pathlib import Path
+
+import pytest
+
+from session_migrate import conversion
+from session_migrate.conversion import ConversionOptions, convert_session, load_session
+from session_migrate.errors import SessionMigrateError
+from session_migrate.formats import opencode
+from session_migrate.model import AgentFormat, Event, EventKind, Provenance, Role, TargetFormat
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def artifact(tmp_path: Path):
+    session = load_session(FIXTURES / "codex-0.144.4/basic.jsonl", AgentFormat.CODEX)
+    return convert_session(
+        session,
+        ConversionOptions(
+            target_format=TargetFormat.OPENCODE,
+            target_cli_version="2.0.23",
+            cwd=tmp_path,
+            model_provider="fixture",
+            model="test",
+        ),
+    )
+
+
+def test_v2_flat_schema_portable_roundtrip(tmp_path):
+    target = artifact(tmp_path)
+    value = json.loads(target.native_bytes)
+    assert value["info"]["location"] == {"directory": str(tmp_path)}
+    assert value["info"]["model"] == {"id": "test", "providerID": "fixture"}
+    assert all("info" not in m and "parts" not in m for m in value["messages"])
+    opencode.validate_native_bytes(target.native_bytes, target.session_id)
+    path = tmp_path / "bundle.json"
+    path.write_bytes(target.native_bytes)
+    parsed = opencode.parse_import(path)
+    source = load_session(FIXTURES / "codex-0.144.4/basic.jsonl", AgentFormat.CODEX)
+    assert [e.text for e in parsed.events if e.kind == EventKind.MESSAGE] == [
+        e.text for e in source.events if e.kind == EventKind.MESSAGE
+    ]
+    assert [e.tool_call_id for e in parsed.events if e.kind == EventKind.TOOL_CALL] == [
+        e.tool_call_id for e in source.events if e.kind == EventKind.TOOL_CALL
+    ]
+
+
+def test_v2_tools_images_compaction_and_incomplete_call(tmp_path):
+    from dataclasses import replace
+
+    base = load_session(FIXTURES / "codex-0.144.4/basic.jsonl", AgentFormat.CODEX)
+    image = "data:image/png;base64,aGVsbG8="
+    events = (
+        Event(
+            kind=EventKind.MESSAGE, role=Role.USER, text="look", provenance=Provenance(1, "user")
+        ),
+        Event(
+            kind=EventKind.CONTEXT,
+            role=Role.USER,
+            payload={"block_type": "image", "image_url": image},
+            provenance=Provenance(1, "user"),
+        ),
+        Event(
+            kind=EventKind.TOOL_CALL,
+            role=Role.ASSISTANT,
+            tool_call_id="call_one",
+            tool_name="read",
+            payload={"input": {"path": "a"}},
+            provenance=Provenance(2, "assistant"),
+        ),
+        Event(
+            kind=EventKind.TOOL_RESULT,
+            role=Role.TOOL,
+            tool_call_id="call_one",
+            text="result",
+            payload={
+                "content_blocks": [
+                    {"type": "text", "text": "result"},
+                    {"type": "image", "image_url": image},
+                ]
+            },
+            provenance=Provenance(3, "tool"),
+        ),
+        Event(
+            kind=EventKind.COMPACTION,
+            text="portable summary",
+            provenance=Provenance(4, "compaction"),
+        ),
+        Event(
+            kind=EventKind.TOOL_CALL,
+            role=Role.ASSISTANT,
+            tool_call_id="unfinished",
+            tool_name="shell",
+            payload={"input": {"cmd": "echo x"}},
+            provenance=Provenance(5, "assistant"),
+        ),
+    )
+    data, losses = opencode.serialize(
+        replace(base, events=events), session_id="ses_fixture", cwd=tmp_path, cli_version="2.0.23"
+    )
+    opencode.validate_native_bytes(data, "ses_fixture")
+    value = json.loads(data)
+    assert value["messages"][0]["files"][0]["data"] == "aGVsbG8="
+    completed = value["messages"][1]["content"][0]
+    assert completed["id"] == "call_one"
+    assert completed["state"]["content"][1]["uri"] == image
+    assert value["messages"][2]["type"] == "compaction"
+    assert value["messages"][2]["summary"] == "portable summary"
+    assert value["messages"][3]["content"][0]["state"]["status"] == "error"
+    assert losses["tool_call:v2_incomplete_archived"] == 1
+    path = tmp_path / "rich.json"
+    path.write_bytes(data)
+    parsed = opencode.parse_import(path)
+    assert any(
+        e.kind == EventKind.COMPACTION and e.text == "portable summary" for e in parsed.events
+    )
+    assert any(
+        e.kind == EventKind.TOOL_RESULT and e.tool_call_id == "call_one" and e.text == "result"
+        for e in parsed.events
+    )
+    assert any(
+        e.kind == EventKind.CONTEXT and e.payload["image_url"] == image for e in parsed.events
+    )
+
+
+@pytest.mark.parametrize("change", ["duplicate", "tool", "location", "tokens", "base64"])
+def test_v2_rejects_malformed_portable_content(tmp_path, change):
+    value = json.loads(artifact(tmp_path).native_bytes)
+    if change == "duplicate":
+        value["messages"].append(value["messages"][0])
+    elif change == "location":
+        value["info"]["location"] = None
+    elif change == "tokens":
+        value["info"]["tokens"] = {}
+    elif change == "base64":
+        value["messages"][0]["files"] = [{"data": "!!!", "mime": "image/png"}]
+    else:
+        value["messages"][1]["content"] = [
+            {"type": "tool", "state": {"status": "completed", "input": {}, "content": []}}
+        ]
+    with pytest.raises(SessionMigrateError):
+        opencode.validate_native_bytes(json.dumps(value).encode(), value["info"]["id"])
+
+
+def test_v2_private_provider_state_accounted(tmp_path):
+    value = json.loads(artifact(tmp_path).native_bytes)
+    assistant = next(m for m in value["messages"] if m["type"] == "assistant")
+    assistant["providerState"] = {"encrypted": "private"}
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(value))
+    parsed = opencode.parse_import(path)
+    assert ("opencode_v2_providerState", 1) in parsed.losses
+    assert all("private" not in (e.text or "") for e in parsed.events)
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("2.0.23", True),
+        ("opencode v2.0.23", True),
+        ("2.0.23-gateway.3648f00e", True),
+        ("2.1.0", False),
+        ("9.9.9", False),
+        ("1.17.20", True),
+    ],
+)
+def test_version_schema_gate(value, expected):
+    assert opencode.supported_version(value) is expected
+
+
+def test_v2_cli_commands_and_conflict_not_success(tmp_path, monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(conversion, "_opencode_version", lambda *args: "2.0.23")
+    calls = []
+
+    def run(command, environ):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "Session already exists\n", "")
+
+    monkeypatch.setattr(conversion, "_run_opencode", run)
+    with pytest.raises(SessionMigrateError, match="refused"):
+        conversion._invoke_opencode_import(
+            Path("opencode"), tmp_path / "bundle.json", {}, cwd=tmp_path
+        )
+    assert calls[0][1:3] == ["session", "import"]
+    assert calls[0][-3:] == ["--directory", str(tmp_path), "--standalone"]
+
+
+def test_native_v2_isolated_import_export_dry_run_and_collision(tmp_path):
+    """Opt-in actual native CLI integration; only synthetic fixture data."""
+    import os
+    from dataclasses import replace
+
+    native = os.environ.get("SESSION_MIGRATE_TEST_OPENCODE_V2")
+    if not native:
+        pytest.skip("set SESSION_MIGRATE_TEST_OPENCODE_V2 to a real v2 binary")
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(tmp_path / "home"),
+        "TMPDIR": str(tmp_path),
+        "OPENCODE_DISABLE_AUTOUPDATE": "true",
+        "OPENCODE_CONFIG_CONTENT": '{"disabled_providers":["opencode"]}',
+    }
+    for key, name in [
+        ("XDG_CONFIG_HOME", "config"),
+        ("XDG_DATA_HOME", "data"),
+        ("XDG_CACHE_HOME", "cache"),
+        ("XDG_STATE_HOME", "state"),
+    ]:
+        env[key] = str(tmp_path / name)
+    for value in [env["HOME"], *(env[k] for k in env if k.startswith("XDG_"))]:
+        Path(value).mkdir()
+    target = artifact(tmp_path)
+    # Include a native completed compaction and linked tool output from the Codex fixture.
+    value = json.loads(target.native_bytes)
+    image = "data:image/png;base64,aGVsbG8="
+    user = next(m for m in value["messages"] if m["type"] == "user")
+    user["files"] = [{"data": "aGVsbG8=", "mime": "image/png", "source": {"type": "inline"}}]
+    tool = next(
+        c
+        for m in value["messages"]
+        if m["type"] == "assistant"
+        for c in m["content"]
+        if c["type"] == "tool"
+    )
+    tool["state"]["content"].append({"type": "file", "uri": image, "mime": "image/png"})
+    value["messages"].append(
+        {
+            "id": "msg_native_compaction",
+            "type": "compaction",
+            "time": {"created": value["info"]["time"]["updated"]},
+            "status": "completed",
+            "reason": "auto",
+            "summary": "Retain forty one.",
+            "recent": "Latest request.",
+        }
+    )
+    target = replace(target, native_bytes=(json.dumps(value) + "\n").encode())
+    manifest = tmp_path / "manifest.json"
+    cli = Path(native)
+    conversion.install_opencode_artifact(
+        target, manifest_path=manifest, target_cli=cli, environ=env, dry_run=True
+    )
+    assert not manifest.exists()
+    conversion.install_opencode_artifact(
+        target, manifest_path=manifest, target_cli=cli, environ=env
+    )
+    assert manifest.exists()
+    exported = conversion.load_opencode_session(target.session_id, source_cli=cli, environ=env)
+    assert any(e.kind == EventKind.COMPACTION and "forty one" in e.text for e in exported.events)
+    assert any(e.kind == EventKind.TOOL_RESULT for e in exported.events)
+    assert any(
+        e.kind == EventKind.CONTEXT and e.payload.get("image_url") == image for e in exported.events
+    )
+    # Native global conflict is also protected when the project-filtered preflight misses it.
+    other = tmp_path / "other-manifest.json"
+    with pytest.raises(SessionMigrateError, match="overwrite|refused"):
+        conversion.install_opencode_artifact(
+            target, manifest_path=other, target_cli=cli, environ=env
+        )
+    assert not other.exists()
+
+
+def test_v2_content_free_inspection(tmp_path):
+    from session_migrate.inspection import inspect_session
+
+    path = tmp_path / "inspection.json"
+    path.write_bytes(artifact(tmp_path).native_bytes)
+    result = inspect_session(path, source_format=AgentFormat.OPENCODE)
+    assert result.cwd == str(tmp_path)
+    assert result.tool_calls > 0 and result.tool_results > 0
+    assert result.roles.get("user", 0) > 0
+    assert result.records > 0

@@ -58,6 +58,11 @@ here. Native format compatibility is documented separately in
   wire formats, Connect-RPC interfaces, and collision invariants in
   `docs/antigravity-desktop-format.md`.
 
+- Add version-aware OpenCode 2.0 public session transfer support, retaining the
+  legacy 1.17.20 adapter and native no-overwrite/dry-run controls. Preserve
+  portable tools, inline media, and completed compaction summaries, and account
+  for incomplete tools and provider-private state.
+
 ## 0.11.0 - 2026-09-11
 
 - Read root Codex rollouts written with `history_mode: "paginated"` by using
