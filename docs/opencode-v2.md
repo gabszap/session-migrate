@@ -17,6 +17,10 @@ because native v2 transfer drops unsettled assistant records. Their input is
 retained and this change is recorded in the loss manifest. Encrypted checkpoints
 and provider-private state are not portable and remain explicitly accounted for.
 No private SQLite writes or source transcript changes are performed.
+Free-form tool inputs are wrapped as `{\"input\": ORIGINAL_VALUE}` to satisfy
+OpenCode's object input schema. The `tool_call:non_object_input` manifest counter
+records this shape transformation, not an omitted call. String inputs remain
+unchanged inside the wrapper, along with their call IDs and linked results.
 
 Dry run performs native preflight without importing a session or writing a
 migration manifest. The target CLI itself may initialize its ordinary local

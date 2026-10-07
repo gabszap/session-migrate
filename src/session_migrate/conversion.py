@@ -35,6 +35,7 @@ from session_migrate.formats import (
     muse,
     omp,
     opencode,
+    opencode_v2,
     openhands,
     pi,
     qwen,
@@ -539,13 +540,22 @@ def convert_session(session: Session, options: ConversionOptions) -> ConversionA
             timestamp=timestamp,
         )
     pinned_target = _pinned_target_version(target_format)
-    if target_version != pinned_target:
+    observed_target = target_version
+    version_message = "target metadata version differs but the writer schema remains pinned"
+    if target_format == TargetFormat.OPENCODE and opencode.is_v2(target_version):
+        pinned_target = opencode_v2.VALIDATED_VERSION
+        observed_target = opencode_v2.version(target_version)
+        version_message = (
+            "selected OpenCode 2.0 transfer schema; exact target release differs "
+            "from the validated native integration release"
+        )
+    if observed_target != pinned_target:
         warnings.append(
             {
                 "code": "unvalidated_target_version",
                 "observed": target_version,
                 "validated": pinned_target,
-                "message": "target metadata version differs but the writer schema remains pinned",
+                "message": version_message,
             }
         )
     if not native_bytes:
@@ -611,7 +621,7 @@ def convert_session(session: Session, options: ConversionOptions) -> ConversionA
             AgentFormat.DEVIN: devin.PINNED_DEVIN_VERSION,
         }[session.source_format]
         if session.source_format == AgentFormat.OPENCODE and opencode.is_v2(session.cli_version):
-            pinned_source = "2.0.23"
+            pinned_source = opencode_v2.VALIDATED_VERSION
         if session.cli_version != pinned_source:
             warnings.append(
                 {

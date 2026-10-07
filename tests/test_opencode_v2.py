@@ -28,6 +28,41 @@ def artifact(tmp_path: Path):
     )
 
 
+@pytest.mark.parametrize(
+    ("release", "validated", "warning_expected"),
+    [
+        ("1.17.20", "1.17.20", False),
+        ("2.0.23", "2.0.23", False),
+        ("opencode v2.0.23", "2.0.23", False),
+        ("2.0.24", "2.0.23", True),
+        ("2.0.23-gateway.custom", "2.0.23", True),
+    ],
+)
+def test_target_version_warning_matches_selected_schema(
+    tmp_path, release, validated, warning_expected
+):
+    session = load_session(FIXTURES / "codex-0.144.4/basic.jsonl", AgentFormat.CODEX)
+    target = convert_session(
+        session,
+        ConversionOptions(
+            target_format=TargetFormat.OPENCODE,
+            target_cli_version=release,
+            cwd=tmp_path,
+            model_provider="fixture",
+            model="test",
+        ),
+    )
+    warnings = [w for w in target.warnings if w["code"] == "unvalidated_target_version"]
+    assert bool(warnings) is warning_expected
+    if warning_expected:
+        assert warnings[0]["validated"] == validated
+        assert warnings[0]["observed"] == release
+        assert "selected OpenCode 2.0 transfer schema" in warnings[0]["message"]
+        assert "remains pinned" not in warnings[0]["message"]
+    native = json.loads(target.native_bytes)
+    assert ("location" in native["info"]) is opencode.is_v2(release)
+
+
 def test_v2_flat_schema_portable_roundtrip(tmp_path):
     target = artifact(tmp_path)
     value = json.loads(target.native_bytes)
@@ -45,6 +80,56 @@ def test_v2_flat_schema_portable_roundtrip(tmp_path):
     assert [e.tool_call_id for e in parsed.events if e.kind == EventKind.TOOL_CALL] == [
         e.tool_call_id for e in source.events if e.kind == EventKind.TOOL_CALL
     ]
+
+
+def test_freeform_tool_input_is_wrapped_without_losing_call_or_result(tmp_path):
+    from dataclasses import replace
+
+    session = load_session(FIXTURES / "codex-0.144.4/basic.jsonl", AgentFormat.CODEX)
+    original = next(e for e in session.events if e.kind == EventKind.TOOL_CALL)
+    freeform = "*** Begin Patch\n+Unicode: é λ\n*** End Patch\n"
+    session = replace(
+        session,
+        events=tuple(
+            replace(e, payload={"input": freeform}) if e is original else e for e in session.events
+        ),
+    )
+    target = convert_session(
+        session,
+        ConversionOptions(
+            target_format=TargetFormat.OPENCODE,
+            target_cli_version="2.0.23",
+            cwd=tmp_path,
+            model_provider="fixture",
+            model="test",
+        ),
+    )
+    native = json.loads(target.native_bytes)
+    tool = next(
+        item
+        for message in native["messages"]
+        if message["type"] == "assistant"
+        for item in message["content"]
+        if item["type"] == "tool" and item["id"] == original.tool_call_id
+    )
+    assert tool["state"]["input"] == {"input": freeform}
+    assert tool["state"]["status"] == "completed"
+    result = next(e for e in session.events if e.kind == EventKind.TOOL_RESULT)
+    assert [item for item in tool["state"]["content"] if item["type"] == "text"] == [
+        {"type": "text", "text": result.text}
+    ]
+    assert target.dropped["tool_call:non_object_input"] == 1
+
+
+def test_cli_help_explains_opencode_schema_selection(capsys):
+    from session_migrate.cli import build_parser
+
+    with pytest.raises(SystemExit) as exc:
+        build_parser().parse_args(["convert", "--help"])
+    assert exc.value.code == 0
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "selects legacy or 2.0 transfer schema for OpenCode" in help_text
+    assert "metadata version only; the writer schema remains pinned" not in help_text
 
 
 def test_v2_tools_images_compaction_and_incomplete_call(tmp_path):

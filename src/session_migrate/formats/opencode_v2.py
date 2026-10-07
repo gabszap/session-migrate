@@ -14,6 +14,7 @@ from typing import Any
 from session_migrate.errors import SessionMigrateError
 
 _VERSION = re.compile(r"(?:opencode v)?(2\.0\.\d+(?:[-+][0-9A-Za-z.-]+)?)")
+VALIDATED_VERSION = "2.0.23"
 
 
 def version(value: str) -> str | None:

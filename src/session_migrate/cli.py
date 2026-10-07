@@ -762,7 +762,10 @@ def _add_conversion_arguments(
     )
     parser.add_argument(
         "--target-cli-version",
-        help="metadata version only; the writer schema remains pinned",
+        help=(
+            "target release; selects legacy or 2.0 transfer schema for OpenCode, "
+            "metadata only for other targets"
+        ),
     )
     parser.add_argument(
         "--target-cli",
