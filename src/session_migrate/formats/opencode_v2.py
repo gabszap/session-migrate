@@ -189,6 +189,10 @@ def _to_legacy(bundle: dict[str, Any]) -> dict[str, Any]:
         if kind == "compaction":
             if message.get("status") != "completed":
                 continue
+            # A provider-private checkpoint without portable text must not retire
+            # earlier readable history when replayed in another harness.
+            if not message["summary"].strip() and not message["recent"].strip():
+                continue
             synthetic_id = mid + "_compaction"
             output.append(
                 {
@@ -362,12 +366,59 @@ def _to_legacy(bundle: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_MESSAGE_FIELDS = {
+    "user": {"text", "files", "agents", "skills"},
+    "assistant": {
+        "agent",
+        "model",
+        "content",
+        "snapshot",
+        "finish",
+        "rawFinish",
+        "providerState",
+        "cost",
+        "tokens",
+        "error",
+        "retry",
+    },
+    "compaction": {
+        "status",
+        "reason",
+        "summary",
+        "recent",
+        "model",
+        "providerState",
+        "providerContext",
+        "cost",
+        "tokens",
+        "error",
+    },
+    "agent-switched": {"agent", "previous"},
+    "model-switched": {"model", "previous"},
+    "location-switched": {"location", "projectID", "subpath", "previous"},
+    "synthetic": {"text", "description"},
+    "system": {"text", "description"},
+    "skill": {"skill", "name", "text"},
+    "shell": {"shellID", "command", "status", "exit", "output"},
+    "idle": {"outcome"},
+}
+
+
 def loss_events(bundle: dict[str, Any]) -> list[Any]:
     """Account for provider-private state and nonportable v2 control records."""
     from session_migrate.formats.opencode import _iso_from_ms
     from session_migrate.model import Event, EventKind, Provenance
 
     events = []
+    if (bundle["info"].get("model") or {}).get("variant"):
+        events.append(
+            Event(
+                kind=EventKind.OPAQUE,
+                timestamp=_iso_from_ms(bundle["info"]["time"]["created"]),
+                payload={"reason": "opencode_v2_session_model_variant"},
+                provenance=Provenance(0, "session"),
+            )
+        )
     for name in ("metadata", "permissions", "revert", "fork"):
         if bundle["info"].get(name):
             events.append(
@@ -385,13 +436,47 @@ def loss_events(bundle: dict[str, Any]) -> list[Any]:
             reasons.append(f"opencode_v2_{kind}_record")
         elif kind == "compaction" and message.get("status") != "completed":
             reasons.append(f"opencode_v2_compaction_{message.get('status')}")
+        elif (
+            kind == "compaction"
+            and not message["summary"].strip()
+            and not message["recent"].strip()
+        ):
+            reasons.append("opencode_v2_compaction_empty_portable_summary")
+        if isinstance(message.get("model"), dict) and message["model"].get("variant"):
+            reasons.append("opencode_v2_message_model_variant")
         for name in ("providerState", "providerContext", "metadata", "snapshot", "retry", "error"):
             if message.get(name):
                 reasons.append(f"opencode_v2_{name}")
         for name in ("agents", "skills"):
             if message.get(name):
                 reasons.append(f"opencode_v2_user_{name}")
-        for content in message.get("content", []):
+        if kind == "user":
+            for attachment in message.get("files", []):
+                if (
+                    any(attachment.get(name) for name in ("name", "description", "mention"))
+                    or attachment.get("source", {}).get("type") == "uri"
+                ):
+                    reasons.append("opencode_v2_file_metadata")
+        allowed = _MESSAGE_FIELDS.get(str(kind), set()) | {"id", "metadata", "time", "type"}
+        if set(message) - allowed:
+            reasons.append("opencode_v2_unknown_message_fields")
+        for content in message["content"] if kind == "assistant" else []:
+            allowed_content = (
+                {"type", "text", "state", "time"}
+                if content.get("type") != "tool"
+                else {
+                    "type",
+                    "id",
+                    "name",
+                    "executed",
+                    "providerState",
+                    "providerResultState",
+                    "state",
+                    "time",
+                }
+            )
+            if set(content) - allowed_content:
+                reasons.append("opencode_v2_unknown_assistant_content_fields")
             if (
                 content.get("type") == "tool"
                 and content.get("state", {}).get("status") == "error"
@@ -431,6 +516,8 @@ def _validate_native(bundle: dict[str, Any]) -> None:
             isinstance(value.get(k), str) for k in ("id", "providerID")
         ):
             raise SessionMigrateError("OpenCode v2 has invalid model reference")
+        if value.get("variant") is not None and not isinstance(value["variant"], str):
+            raise SessionMigrateError("OpenCode v2 has invalid model variant")
 
     info = bundle["info"]
     if info.get("model") is not None:
@@ -462,6 +549,16 @@ def _validate_native(bundle: dict[str, Any]) -> None:
             raise SessionMigrateError("OpenCode v2 has invalid completion time")
         if kind in {"assistant", "model-switched"}:
             ref(m.get("model"))
+        if kind == "user":
+            files = m.get("files", [])
+            if not isinstance(files, list):
+                raise SessionMigrateError("OpenCode v2 user has invalid file attachments")
+            for attachment in files:
+                source = attachment.get("source") if isinstance(attachment, dict) else None
+                if not isinstance(source, dict) or source.get("type") not in {"inline", "uri"}:
+                    raise SessionMigrateError("OpenCode v2 file has invalid source")
+                if source["type"] == "uri" and not isinstance(source.get("uri"), str):
+                    raise SessionMigrateError("OpenCode v2 file has invalid source URI")
         if kind == "assistant":
             if not isinstance(m.get("agent"), str) or not isinstance(m.get("content"), list):
                 raise SessionMigrateError("OpenCode v2 assistant has invalid runtime metadata")
@@ -494,3 +591,18 @@ def _validate_native(bundle: dict[str, Any]) -> None:
                 isinstance(m.get(k), str) for k in ("summary", "recent")
             ):
                 raise SessionMigrateError("OpenCode v2 compaction has invalid summary")
+
+
+def record_count(bundle: dict[str, Any]) -> int:
+    return (
+        1
+        + len(bundle["messages"])
+        + sum(
+            len(m["content"])
+            if m["type"] == "assistant"
+            else len(m.get("files", []))
+            if m["type"] == "user"
+            else 0
+            for m in bundle["messages"]
+        )
+    )

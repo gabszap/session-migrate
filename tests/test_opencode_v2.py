@@ -274,3 +274,95 @@ def test_v2_content_free_inspection(tmp_path):
     assert result.tool_calls > 0 and result.tool_results > 0
     assert result.roles.get("user", 0) > 0
     assert result.records > 0
+
+
+@pytest.mark.parametrize("whitespace", ["", "   ", "\n\t"])
+def test_private_only_compaction_preserves_readable_history(tmp_path, whitespace):
+    value = json.loads(artifact(tmp_path).native_bytes)
+    value["messages"] = [m for m in value["messages"] if m["type"] != "compaction"]
+    value["messages"].append(
+        {
+            "id": "msg_private_compaction",
+            "type": "compaction",
+            "time": {"created": value["info"]["time"]["updated"]},
+            "status": "completed",
+            "reason": "auto",
+            "summary": whitespace,
+            "recent": whitespace,
+            "providerContext": {"encrypted": "private"},
+        }
+    )
+    path = tmp_path / "private-compaction.json"
+    path.write_text(json.dumps(value))
+    source = opencode.parse_session(path)
+    assert not any(e.kind == EventKind.COMPACTION for e in source.events)
+    assert any(e.kind == EventKind.MESSAGE and e.role == Role.USER for e in source.events)
+    target = convert_session(
+        source,
+        ConversionOptions(
+            target_format=TargetFormat.OPENCODE, target_cli_version="2.0.23", cwd=tmp_path
+        ),
+    )
+    native = json.loads(target.native_bytes)
+    assert not any(m["type"] == "compaction" for m in native["messages"])
+    assert target.dropped["opaque:opencode_v2_compaction_empty_portable_summary"] == 1
+    assert target.dropped["opaque:opencode_v2_providerContext"] == 1
+    assert b'"encrypted"' not in target.native_bytes
+
+
+def test_v2_reasoning_variant_loss_is_explicit(tmp_path):
+    value = json.loads(artifact(tmp_path).native_bytes)
+    value["info"]["model"]["variant"] = "high"
+    assistant = next(m for m in value["messages"] if m["type"] == "assistant")
+    assistant["model"]["variant"] = "max"
+    path = tmp_path / "variants.json"
+    path.write_text(json.dumps(value))
+    parsed = opencode.parse_import(path)
+    assert ("opencode_v2_session_model_variant", 1) in parsed.losses
+    assert ("opencode_v2_message_model_variant", 1) in parsed.losses
+
+
+@pytest.mark.parametrize("text", [None, 3, {}, []])
+def test_v2_invalid_user_text_fails_closed(tmp_path, text):
+    value = json.loads(artifact(tmp_path).native_bytes)
+    user = next(m for m in value["messages"] if m["type"] == "user")
+    user["text"] = text
+    with pytest.raises(SessionMigrateError, match="user message has invalid text"):
+        opencode.validate_native_bytes(json.dumps(value).encode(), value["info"]["id"])
+
+
+def test_v2_unknown_message_type_fails_closed(tmp_path):
+    value = json.loads(artifact(tmp_path).native_bytes)
+    value["messages"][0]["type"] = "future-user"
+    with pytest.raises(SessionMigrateError, match="unsupported message type"):
+        opencode.validate_native_bytes(json.dumps(value).encode(), value["info"]["id"])
+
+
+@pytest.mark.parametrize("extra_content", [None, 3, "unknown", [{"type": "future-part"}]])
+def test_unknown_user_extension_is_accounted_without_crashing(tmp_path, extra_content):
+    value = json.loads(artifact(tmp_path).native_bytes)
+    user = next(m for m in value["messages"] if m["type"] == "user")
+    user["content"] = extra_content
+    path = tmp_path / "extension.json"
+    path.write_text(json.dumps(value))
+    parsed = opencode.parse_import(path)
+    assert ("opencode_v2_unknown_message_fields", 1) in parsed.losses
+    assert any(e.kind == EventKind.MESSAGE and e.role == Role.USER for e in parsed.events)
+
+
+def test_file_metadata_omission_is_explicit(tmp_path):
+    value = json.loads(artifact(tmp_path).native_bytes)
+    user = next(m for m in value["messages"] if m["type"] == "user")
+    user["files"] = [
+        {
+            "data": "aGVsbG8=",
+            "mime": "image/png",
+            "source": {"type": "uri", "uri": "file:///private/image.png"},
+            "name": "image.png",
+        }
+    ]
+    path = tmp_path / "file-metadata.json"
+    path.write_text(json.dumps(value))
+    parsed = opencode.parse_import(path)
+    assert ("opencode_v2_file_metadata", 1) in parsed.losses
+    assert any(e.kind == EventKind.CONTEXT for e in parsed.events)

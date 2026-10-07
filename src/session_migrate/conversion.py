@@ -1942,11 +1942,7 @@ def _native_record_count(data: bytes, target_format: TargetFormat) -> int:
     value = json.loads(data)
     messages = value.get("messages", []) if isinstance(value, dict) else []
     if opencode.opencode_v2.is_bundle(value):
-        return (
-            1
-            + len(messages)
-            + sum(len(m.get("content", [])) + len(m.get("files", [])) for m in messages)
-        )
+        return opencode.opencode_v2.record_count(value)
     return (
         1
         + len(messages)
@@ -2094,6 +2090,12 @@ def _invoke_opencode_export(
         )
         os.fsync(descriptor)
     except (OSError, subprocess.TimeoutExpired) as exc:
+        # Windows cannot unlink an open export file. Close our descriptor first
+        # and keep cleanup failures from replacing the actual export error.
+        if descriptor is not None:
+            with suppress(OSError):
+                os.close(descriptor)
+            descriptor = None
         with suppress(OSError):
             bundle_path.unlink()
         raise SessionMigrateError("OpenCode CLI export failed") from exc

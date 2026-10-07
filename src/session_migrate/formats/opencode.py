@@ -697,11 +697,7 @@ def parse_import(path: Path) -> ParsedOpenCodeSession:
         title=title,
         events=tuple(events),
         raw_record_count=(
-            1
-            + len(native_v2["messages"])
-            + sum(
-                len(m.get("content", [])) + len(m.get("files", [])) for m in native_v2["messages"]
-            )
+            opencode_v2.record_count(native_v2)
             if native_v2 is not None
             else 1 + len(messages) + part_count
         ),
