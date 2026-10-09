@@ -314,7 +314,11 @@ def _to_legacy(bundle: dict[str, Any]) -> dict[str, Any]:
                             raise SessionMigrateError("OpenCode v2 tool error is invalid")
                         state["error"] = error["message"]
                     elif status == "streaming":
-                        state = {"status": "pending", "input": {}, "raw": state.get("input")}
+                        state = {
+                            "status": "pending",
+                            "input": {"input": state["input"]},
+                            "raw": state["input"],
+                        }
                     tool_time = content.get("time", clock)
                     state["time"] = {
                         "start": tool_time.get("created", clock["created"]),

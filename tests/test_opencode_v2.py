@@ -28,6 +28,47 @@ def artifact(tmp_path: Path):
     )
 
 
+def test_streamed_tool_source_retains_partial_input_through_portable_target(tmp_path):
+    partial = '{"command":"UNIQUE_PARTIAL_INPUT'
+    value = json.loads(artifact(tmp_path).native_bytes)
+    tool = next(
+        c
+        for m in value["messages"]
+        if m["type"] == "assistant"
+        for c in m["content"]
+        if c["type"] == "tool"
+    )
+    tool["state"] = {"status": "streaming", "input": partial}
+    source_path = tmp_path / "streaming-source.json"
+    source_path.write_text(json.dumps(value))
+    source = opencode.parse_session(source_path)
+    call = next(e for e in source.events if e.kind == EventKind.TOOL_CALL)
+    assert call.payload["input"] == {"input": partial}
+    target = convert_session(
+        source,
+        ConversionOptions(
+            target_format=TargetFormat.OPENCODE,
+            target_cli_version="2.0.23",
+            cwd=tmp_path,
+            model_provider="fixture",
+            model="test",
+        ),
+    )
+    exported = json.loads(target.native_bytes)
+    archived = next(
+        c
+        for m in exported["messages"]
+        if m["type"] == "assistant"
+        for c in m["content"]
+        if c["type"] == "tool"
+    )
+    assert archived["id"] == tool["id"]
+    assert archived["state"]["input"] == {"input": partial}
+    assert archived["state"]["status"] == "error"
+    assert archived["state"]["error"]["type"] == "ImportedIncompleteTool"
+    assert target.dropped["tool_call:v2_incomplete_archived"] == 1
+
+
 @pytest.mark.parametrize(
     ("release", "validated", "warning_expected"),
     [

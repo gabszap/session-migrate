@@ -2100,12 +2100,6 @@ def _invoke_opencode_export(
         )
         os.fsync(descriptor)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        # Windows cannot unlink an open export file. Close our descriptor first
-        # and keep cleanup failures from replacing the actual export error.
-        if descriptor is not None:
-            with suppress(OSError):
-                os.close(descriptor)
-            descriptor = None
         with suppress(OSError):
             bundle_path.unlink()
         raise SessionMigrateError("OpenCode CLI export failed") from exc

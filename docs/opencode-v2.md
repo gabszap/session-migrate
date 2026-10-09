@@ -1,41 +1,61 @@
-# OpenCode 2.0 transfers
+# OpenCode 2.0 public session transfers
 
-`session-migrate import SOURCE --to opencode --target-cli /path/to/opencode`
-now detects the installed CLI and selects its public transfer format. Legacy
-1.17.20 continues using `opencode import/export --pure`; 2.0.x uses
-`opencode session import/export --standalone`. Convert-only output remains
-legacy by default; pass `--target-cli-version 2.0.23` to write a v2 bundle.
-Other schema series are rejected for automatic import. Custom release suffixes
-and the v2 `opencode v…` version prefix are accepted.
+OpenCode 1.17.20 uses `import/export --pure` and nested message/part bundles.
+OpenCode 2.0 uses `session import/export --standalone` and flat typed messages.
+Native import detects the installed client and selects its transfer schema.
+Convert-only output remains legacy unless `--target-cli-version 2.0.23` is set.
+Unsupported schema series fail closed. The `opencode v` version prefix and
+custom suffixes are accepted; unvalidated exact releases receive schema-aware
+warnings. Native acceptance is pinned to stock 2.0.23, not every 2.0.x release.
 
-The v2 bundle uses session `location`/`model` and flat typed messages, including
-native tool content and completed compaction summaries. Conversion reuses the
-existing portable-event normalization and loss manifest. Text, linked tool
-input/results, inline image attachments, and portable compaction summaries are
-retained. Incomplete tool calls are archived as explicit imported errors,
-because native v2 transfer drops unsettled assistant records. Their input is
-retained and this change is recorded in the loss manifest. Encrypted checkpoints
-and provider-private state are not portable and remain explicitly accounted for.
-No private SQLite writes or source transcript changes are performed.
-Free-form tool inputs are wrapped as `{\"input\": ORIGINAL_VALUE}` to satisfy
-OpenCode's object input schema. The `tool_call:non_object_input` manifest counter
-records this shape transformation, not an omitted call. String inputs remain
-unchanged inside the wrapper, along with their call IDs and linked results.
+The v2 adapter preserves ordered user/assistant text, linked tool inputs and
+results, inline user/tool images, and readable completed compaction summaries.
+User text blocks in one native message become their exact newline join.
+Private-only or whitespace-only checkpoints do not retire readable history.
+Encrypted provider checkpoints, private traces, source reasoning variants and
+unsupported control/metadata fields are explicitly counted as omissions.
 
-Dry run performs native preflight without importing a session or writing a
-migration manifest. The target CLI itself may initialize its ordinary local
-store during preflight. Native import enforces global identity conflicts; the
-adapter also checks existing IDs and requires the explicit native success
-confirmation (v2 returns exit status zero even on conflict). Verification exports
-the imported ID through the public CLI rather than relying on a project-filtered
-session list.
+A streamed tool input can be an incomplete JSON string. The source projection
+keeps it unchanged inside `{ "input": ORIGINAL_STRING }`; it does not replace
+it with `{}` or attempt to parse/complete it. On conversion, an unfinished call
+is archived as an `ImportedIncompleteTool` error with the same ID and input,
+because native transfer discards unsettled assistant records. This is historical
+input preservation, not an executable resumed partial tool invocation. The
+source→portable→target regression includes an unterminated string input.
 
-For isolated validation, use a clean HOME and XDG_CONFIG_HOME/XDG_DATA_HOME/
-XDG_CACHE_HOME/XDG_STATE_HOME, a credential-free configuration, and the actual
-binary instead of a user wrapper that injects production credentials. Migration
-manifests contain source hashes, the target release, conversion warnings, and
-omission counts. Native database imports remain owned by OpenCode.
+OpenCode owns its database import. No private SQLite writes, credentials or
+machine-specific launchers are part of the adapter. Dry run performs public
+native preflight without importing or writing a migration manifest; native
+preflight may initialize the client's ordinary store. Imports enforce global
+identity collisions and explicit success confirmation, then verify the imported
+ID using public export. A conflict can have native exit status zero and still
+fails import confirmation.
 
-Validation currently targets the installed Linux gateway build of OpenCode
-2.0.23, using synthetic transcripts and no paid model requests. Windows native
-validation is separate; Linux tests do not establish Windows runtime behavior.
+## Reproducible native and route checks
+
+```sh
+./scripts/install-native-test-clis.sh /tmp/session-migrate-native opencode-v2
+./scripts/run-native-test-client.sh \
+  opencode-v2 /tmp/session-migrate-native/session-migrate-native.env
+uv run pytest -q tests/test_opencode_v2.py tests/test_route_matrix.py
+```
+
+The `opencode-v2` CI matrix entry installs **@opencode/cli@2.0.23** (the legacy
+package is opencode-ai), supplies `SESSION_MIGRATE_TEST_OPENCODE_V2`, and rejects
+skipped assigned tests. Native tests use synthetic transcripts, isolated HOME
+and XDG directories, an explicit credential-free config, and a deterministic
+localhost provider. They verify import/export, dry run, collisions, cold process
+reopening, compaction/tool replay and a new persisted reply under the same ID.
+They do not use real accounts or supplier inference credits. The default suite
+can skip native tests when that exact executable is unavailable; the selected
+CI job cannot silently pass those skips.
+
+Route tests cover legacy and v2 OpenCode source and target variants against the
+other supported formats. The 19 variants remain eighteen harnesses. Existing
+legacy wire behavior and native tests remain separate.
+
+This change is independent of the Windows filesystem-cleanup and Codex child
+projection changes split from PR #10. Those fixes complement Windows execution
+and additional Codex sources, but neither is required to review this schema or
+run the Linux v2 gate. Native Windows acceptance and all historical client
+versions are not established by this branch's Linux gates.
