@@ -14,13 +14,13 @@ from session_migrate.model import AgentFormat, Event, EventKind, Provenance, Rol
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def artifact(tmp_path: Path):
+def artifact(tmp_path: Path, release: str = "2.0.23"):
     session = load_session(FIXTURES / "codex-0.144.4/basic.jsonl", AgentFormat.CODEX)
     return convert_session(
         session,
         ConversionOptions(
             target_format=TargetFormat.OPENCODE,
-            target_cli_version="2.0.23",
+            target_cli_version=release,
             cwd=tmp_path,
             model_provider="fixture",
             model="test",
@@ -73,6 +73,7 @@ def test_streamed_tool_source_retains_partial_input_through_portable_target(tmp_
     ("release", "validated", "warning_expected"),
     [
         ("1.17.20", "1.17.20", False),
+        ("2.0.22", "2.0.23", False),
         ("2.0.23", "2.0.23", False),
         ("opencode v2.0.23", "2.0.23", False),
         ("2.0.24", "2.0.23", True),
@@ -285,9 +286,11 @@ def test_v2_private_provider_state_accounted(tmp_path):
     "value, expected",
     [
         ("2.0.23", True),
+        ("2.0.22", True),
         ("opencode v2.0.23", True),
         ("2.0.23-gateway.3648f00e", True),
         ("2.1.0", False),
+        ("3.0.0", False),
         ("9.9.9", False),
         ("1.17.20", True),
     ],
@@ -339,7 +342,9 @@ def test_native_v2_isolated_import_export_dry_run_and_collision(tmp_path):
         env[key] = str(tmp_path / name)
     for value in [env["HOME"], *(env[k] for k in env if k.startswith("XDG_"))]:
         Path(value).mkdir()
-    target = artifact(tmp_path)
+    release = conversion._opencode_version(Path(native), env)
+    assert release in {"2.0.22", "2.0.23"}
+    target = artifact(tmp_path, release)
     # Include a native completed compaction and linked tool output from the Codex fixture.
     value = json.loads(target.native_bytes)
     image = "data:image/png;base64,aGVsbG8="
@@ -376,6 +381,7 @@ def test_native_v2_isolated_import_export_dry_run_and_collision(tmp_path):
     )
     assert manifest.exists()
     exported = conversion.load_opencode_session(target.session_id, source_cli=cli, environ=env)
+    assert exported.cli_version == release
     assert any(e.kind == EventKind.COMPACTION and "forty one" in e.text for e in exported.events)
     assert any(e.kind == EventKind.TOOL_RESULT for e in exported.events)
     assert any(
@@ -388,6 +394,17 @@ def test_native_v2_isolated_import_export_dry_run_and_collision(tmp_path):
             target, manifest_path=other, target_cli=cli, environ=env
         )
     assert not other.exists()
+    from session_migrate.catalog import Catalog
+
+    with Catalog(tmp_path / "catalog.sqlite3") as catalog:
+        result = catalog.refresh(
+            opencode_roots=(Path(env["XDG_DATA_HOME"]) / "opencode",), include_auto=False
+        )
+        assert result.root_errors == 0
+        entries = catalog.list_sessions(agent_format=AgentFormat.OPENCODE, include_paths=True)
+        assert [entry.session_id for entry in entries] == [target.session_id]
+        assert entries[0].cli_version == release
+        assert entries[0].cwd == str(tmp_path)
 
 
 def test_v2_content_free_inspection(tmp_path):
@@ -400,6 +417,22 @@ def test_v2_content_free_inspection(tmp_path):
     assert result.tool_calls > 0 and result.tool_results > 0
     assert result.roles.get("user", 0) > 0
     assert result.records > 0
+
+
+def test_v2_autodetection_uses_flat_schema_while_legacy_remains_ambiguous(tmp_path):
+    from session_migrate.errors import FormatDetectionError
+    from session_migrate.inspection import detect_path_format, inspect_session
+
+    path = tmp_path / "auto.json"
+    path.write_bytes(artifact(tmp_path).native_bytes)
+    assert detect_path_format(path) == AgentFormat.OPENCODE
+    assert inspect_session(path).format == AgentFormat.OPENCODE.value
+    assert load_session(path).source_format == AgentFormat.OPENCODE
+    session = load_session(FIXTURES / "codex-0.144.4/basic.jsonl", AgentFormat.CODEX)
+    legacy = convert_session(session, ConversionOptions(TargetFormat.OPENCODE))
+    path.write_bytes(legacy.native_bytes)
+    with pytest.raises(FormatDetectionError, match="no reliable producer marker"):
+        detect_path_format(path)
 
 
 @pytest.mark.parametrize("whitespace", ["", "   ", "\n\t"])
@@ -415,7 +448,19 @@ def test_private_only_compaction_preserves_readable_history(tmp_path, whitespace
             "reason": "auto",
             "summary": whitespace,
             "recent": whitespace,
-            "providerContext": {"encrypted": "private"},
+            "providerContext": {
+                "version": 1,
+                "provenance": {
+                    "providerID": "fixture",
+                    "provider": "fixture",
+                    "modelID": "test",
+                    "route": "fixture",
+                    "protocol": "fixture",
+                    "endpoint": "fixture-digest",
+                },
+                "messages": [],
+            },
+            "providerState": {"encrypted": "private"},
         }
     )
     path = tmp_path / "private-compaction.json"
@@ -433,6 +478,7 @@ def test_private_only_compaction_preserves_readable_history(tmp_path, whitespace
     assert not any(m["type"] == "compaction" for m in native["messages"])
     assert target.dropped["opaque:opencode_v2_compaction_empty_portable_summary"] == 1
     assert target.dropped["opaque:opencode_v2_providerContext"] == 1
+    assert target.dropped["opaque:opencode_v2_providerState"] == 1
     assert b'"encrypted"' not in target.native_bytes
 
 
@@ -492,3 +538,122 @@ def test_file_metadata_omission_is_explicit(tmp_path):
     parsed = opencode.parse_import(path)
     assert ("opencode_v2_file_metadata", 1) in parsed.losses
     assert any(e.kind == EventKind.CONTEXT for e in parsed.events)
+
+
+@pytest.mark.parametrize("named_files", [1, 2])
+def test_tool_file_metadata_loss_is_counted_per_block_through_conversion(tmp_path, named_files):
+    value = json.loads(artifact(tmp_path).native_bytes)
+    tool = next(
+        content
+        for message in value["messages"]
+        if message["type"] == "assistant"
+        for content in message["content"]
+        if content["type"] == "tool"
+    )
+    uri = "data:image/png;base64,aGVsbG8="
+    file_block = {"type": "file", "uri": uri, "mime": "image/png"}
+    tool["state"]["content"].extend(
+        {**file_block, "name": f"synthetic-filename-{index}.png"} for index in range(named_files)
+    )
+    tool["state"]["content"].append(file_block)
+    expected_uris = [block["uri"] for block in tool["state"]["content"] if block["type"] == "file"]
+    path = tmp_path / "tool-file-metadata.json"
+    path.write_text(json.dumps(value))
+    source = opencode.parse_session(path)
+    target = convert_session(
+        source,
+        ConversionOptions(TargetFormat.OPENCODE, target_cli_version="2.0.23", cwd=tmp_path),
+    )
+    assert target.dropped["opaque:opencode_v2_tool_file_metadata"] == named_files
+    target_tool = next(
+        content
+        for message in json.loads(target.native_bytes)["messages"]
+        if message["type"] == "assistant"
+        for content in message["content"]
+        if content["type"] == "tool" and content["id"] == tool["id"]
+    )
+    files = [block for block in target_tool["state"]["content"] if block["type"] == "file"]
+    assert [block["uri"] for block in files] == expected_uris
+    assert b"synthetic-filename" not in target.native_bytes
+
+
+def test_kilo_metadata_override_keeps_legacy_schema(tmp_path):
+    session = load_session(FIXTURES / "codex-0.144.4/basic.jsonl", AgentFormat.CODEX)
+    target = convert_session(
+        session,
+        ConversionOptions(TargetFormat.KILO, target_cli_version="2.0.23", cwd=tmp_path),
+    )
+    value = json.loads(target.native_bytes)
+    assert value["info"]["version"] == "2.0.23"
+    assert "directory" in value["info"] and "location" not in value["info"]
+    assert all("info" in message and "parts" in message for message in value["messages"])
+
+
+def test_kilo_rejects_opencode_v2_schema(tmp_path):
+    from session_migrate.formats import kilo
+    from session_migrate.inspection import inspect_session
+
+    target = artifact(tmp_path)
+    with pytest.raises(SessionMigrateError, match="legacy nested"):
+        kilo.validate_native_bytes(target.native_bytes, target.session_id)
+    path = tmp_path / "opencode-v2.json"
+    path.write_bytes(target.native_bytes)
+    with pytest.raises(SessionMigrateError, match="legacy nested"):
+        kilo.parse_session(path)
+    with pytest.raises(SessionMigrateError, match="requires --format opencode"):
+        inspect_session(path, source_format=AgentFormat.KILO)
+
+
+@pytest.mark.parametrize("field, malformed", [("cost", "invalid"), ("tokens", {}), ("model", {})])
+def test_v2_compaction_validates_native_metadata_before_projection(tmp_path, field, malformed):
+    value = json.loads(artifact(tmp_path).native_bytes)
+    compaction = next(message for message in value["messages"] if message["type"] == "compaction")
+    compaction[field] = malformed
+    with pytest.raises(SessionMigrateError):
+        opencode.validate_native_bytes(json.dumps(value).encode(), value["info"]["id"])
+
+
+def test_v2_running_tool_requires_native_metadata(tmp_path):
+    value = json.loads(artifact(tmp_path).native_bytes)
+    tool = next(
+        content
+        for message in value["messages"]
+        if message["type"] == "assistant"
+        for content in message["content"]
+        if content["type"] == "tool"
+    )
+    tool["state"] = {"status": "running", "input": {}}
+    with pytest.raises(SessionMigrateError, match="running tool has invalid metadata"):
+        opencode.validate_native_bytes(json.dumps(value).encode(), value["info"]["id"])
+
+
+@pytest.mark.parametrize(
+    "field, malformed",
+    [
+        ("permissions", 42),
+        ("permissions", [{"permission": "read", "pattern": "*", "action": "allow"}]),
+        ("metadata", []),
+        ("fork", 42),
+        ("outcome", "not-outcome"),
+        ("location", {"directory": 42}),
+    ],
+)
+def test_v2_native_session_metadata_cannot_disappear_before_validation(tmp_path, field, malformed):
+    value = json.loads(artifact(tmp_path).native_bytes)
+    value["info"][field] = malformed
+    with pytest.raises(SessionMigrateError):
+        opencode.validate_native_bytes(json.dumps(value).encode(), value["info"]["id"])
+
+
+def test_v2_tool_error_requires_structured_type(tmp_path):
+    value = json.loads(artifact(tmp_path).native_bytes)
+    tool = next(
+        content
+        for message in value["messages"]
+        if message["type"] == "assistant"
+        for content in message["content"]
+        if content["type"] == "tool"
+    )
+    tool["state"] = {"status": "error", "input": {}, "error": {"message": "missing type"}}
+    with pytest.raises(SessionMigrateError, match="invalid structured error"):
+        opencode.validate_native_bytes(json.dumps(value).encode(), value["info"]["id"])

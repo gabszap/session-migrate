@@ -200,7 +200,7 @@ def load_opencode_session(
     if not opencode.supported_version(observed_version):
         raise SessionMigrateError(
             "OpenCode source CLI version mismatch: expected "
-            f"{opencode.PINNED_OPENCODE_VERSION}, observed {observed_version}"
+            f"{opencode.PINNED_OPENCODE_VERSION} or supported 2.0.x, observed {observed_version}"
         )
     temporary_root = values.get("TMPDIR")
     with tempfile.TemporaryDirectory(
@@ -549,7 +549,10 @@ def convert_session(session: Session, options: ConversionOptions) -> ConversionA
             "selected OpenCode 2.0 transfer schema; exact target release differs "
             "from the validated native integration release"
         )
-    if observed_target != pinned_target:
+    target_validated = observed_target == pinned_target or (
+        target_format == TargetFormat.OPENCODE and observed_target in opencode_v2.VALIDATED_VERSIONS
+    )
+    if not target_validated:
         warnings.append(
             {
                 "code": "unvalidated_target_version",
@@ -622,7 +625,11 @@ def convert_session(session: Session, options: ConversionOptions) -> ConversionA
         }[session.source_format]
         if session.source_format == AgentFormat.OPENCODE and opencode.is_v2(session.cli_version):
             pinned_source = opencode_v2.VALIDATED_VERSION
-        if session.cli_version != pinned_source:
+        source_validated = session.cli_version == pinned_source or (
+            session.source_format == AgentFormat.OPENCODE
+            and opencode_v2.version(session.cli_version) in opencode_v2.VALIDATED_VERSIONS
+        )
+        if not source_validated:
             warnings.append(
                 {
                     "code": "unvalidated_source_version",
@@ -1951,8 +1958,8 @@ def _native_record_count(data: bytes, target_format: TargetFormat) -> int:
         return data.count(b"\n")
     value = json.loads(data)
     messages = value.get("messages", []) if isinstance(value, dict) else []
-    if opencode.opencode_v2.is_bundle(value):
-        return opencode.opencode_v2.record_count(value)
+    if opencode_v2.is_bundle(value):
+        return opencode_v2.record_count(value)
     return (
         1
         + len(messages)
@@ -2015,6 +2022,8 @@ def _opencode_version(cli: Path, environ: Mapping[str, str]) -> str:
 
 def detect_opencode_version(target_cli: Path | None = None) -> str:
     values = dict(os.environ)
+    values.setdefault("OPENCODE_DISABLE_AUTOUPDATE", "true")
+    values.setdefault("OPENCODE_DISABLE_PRUNE", "true")
     observed = _opencode_version(_resolve_opencode_cli(target_cli, values), values)
     if not opencode.supported_version(observed):
         raise SessionMigrateError(f"unsupported OpenCode CLI version: {observed}")

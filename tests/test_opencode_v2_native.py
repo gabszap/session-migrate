@@ -18,7 +18,7 @@ from session_migrate.model import EventKind, TargetFormat
 def test_pinned_v2_native_reopens_and_continues_same_session(tmp_path, compaction):
     binary = os.environ.get("SESSION_MIGRATE_TEST_OPENCODE_V2")
     if not binary:
-        pytest.skip("set SESSION_MIGRATE_TEST_OPENCODE_V2 to the pinned 2.0.23 executable")
+        pytest.skip("set SESSION_MIGRATE_TEST_OPENCODE_V2 to a stock 2.0.22 or 2.0.23 executable")
     env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "OPENCODE_DISABLE_AUTOUPDATE": "true"}
     for key in [
         "HOME",
@@ -41,7 +41,8 @@ def test_pinned_v2_native_reopens_and_continues_same_session(tmp_path, compactio
         assert result.returncode == 0, result.stderr
         return result.stdout
 
-    assert run(["--version"]).strip() == "opencode v2.0.23"
+    release = run(["--version"]).strip().removeprefix("opencode v")
+    assert release in {"2.0.22", "2.0.23"}
     source = codex.parse(Path(__file__).parent / "fixtures/codex-0.144.4/basic.jsonl")
     if not compaction:
         source = replace(
@@ -72,7 +73,7 @@ def test_pinned_v2_native_reopens_and_continues_same_session(tmp_path, compactio
             source,
             ConversionOptions(
                 target_format=TargetFormat.OPENCODE,
-                target_cli_version="2.0.23",
+                target_cli_version=release,
                 cwd=project,
                 model_provider="fixture",
                 model="test",

@@ -8,12 +8,48 @@ Unsupported schema series fail closed. The `opencode v` version prefix and
 custom suffixes are accepted; unvalidated exact releases receive schema-aware
 warnings. Native acceptance is pinned to stock 2.0.23, not every 2.0.x release.
 
+The stock 2.0.22 release is also recognized by the native tests; recognition is
+not evidence that a particular local test run used that release.
+
 The v2 adapter preserves ordered user/assistant text, linked tool inputs and
 results, inline user/tool images, and readable completed compaction summaries.
 User text blocks in one native message become their exact newline join.
 Private-only or whitespace-only checkpoints do not retire readable history.
 Encrypted provider checkpoints, private traces, source reasoning variants and
 unsupported control/metadata fields are explicitly counted as omissions.
+
+Completed tool results retain ordered portable `content_blocks`, including
+caption/image interleaving, adjacent text blocks and empty text blocks. Targets
+that support ordered blocks retain them. Legacy OpenCode and Kilo flatten text
+and attachments; `tool_result:content_block_order` records any resulting loss of
+order or segmentation rather than silently treating that projection as exact.
+
+Structured tool errors retain their message. Nondefault error types, HTTP status
+and response bodies are counted separately as `opencode_v2_tool_error_type`,
+`opencode_v2_tool_error_status` and `opencode_v2_tool_error_response` omissions.
+Opaque events and manifests contain reason labels, not diagnostic response bodies.
+
+Original native session fields and all accepted control variants are validated
+before projection/defaults, including required and nested fields and the
+distinction between absent and null optionals. Unsupported readable control
+records are accounted for as omissions; malformed native records are rejected,
+not repaired by discarding them.
+
+Catalog discovery reads legacy `session` and `session_v2` metadata in one
+read-only transaction, preferring v2 for duplicate identities. Flat v2 bundles
+can be autodetected; legacy OpenCode/Kilo bundles remain ambiguous. Kilo keeps
+its legacy nested transfer contract, even with a v2-looking version override.
+
+## Review follow-up and attribution
+
+The focused implementation originated in tudstudent's PR #15, commit
+`0f32c8f377f9667fac8be9325ca3065314b9f0ef`. PR #17 by TheViniAlmeida explicitly
+builds on that implementation and adds catalog discovery and Kilo separation.
+This branch incorporates those adaptations and the review fixes and regression
+coverage from PR #17 commit `2e3671dcf402159bcb456380409a103cfaaf19cf`
+(TheViniAlmeida, `eu@thevinialmeida.com`), addressing xhluca's three findings in
+review `5477456070`. This records both directions of reuse; it does not claim
+sole authorship of the follow-up work or upstream acceptance.
 
 A streamed tool input can be an incomplete JSON string. The source projection
 keeps it unchanged inside `{ "input": ORIGINAL_STRING }`; it does not replace
@@ -37,7 +73,7 @@ fails import confirmation.
 ./scripts/install-native-test-clis.sh /tmp/session-migrate-native opencode-v2
 ./scripts/run-native-test-client.sh \
   opencode-v2 /tmp/session-migrate-native/session-migrate-native.env
-uv run pytest -q tests/test_opencode_v2.py tests/test_route_matrix.py
+uv run pytest -q tests/test_opencode_v2.py tests/test_opencode_v2_review.py tests/test_route_matrix.py
 ```
 
 The `opencode-v2` CI matrix entry installs **@opencode/cli@2.0.23** (the legacy
