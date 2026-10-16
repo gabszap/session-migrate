@@ -1253,6 +1253,48 @@ def install_openhands_artifact(
     return events_path, manifest_path
 
 
+def _resolve_hermes_title_conflict(
+    artifact: ConversionArtifact, *, target_home: Path
+) -> ConversionArtifact:
+    """Install without the title when the target store already holds it.
+
+    Hermes enforces ``idx_sessions_title_unique``, a partial unique index over
+    non-null session titles, so a second session cannot reuse one; its own
+    importer treats the title as cosmetic and leaves a conflicting session
+    untitled.  The migrator does the same and counts the omission, instead of
+    letting a cosmetic field refuse the whole migration.
+
+    The store is sampled before the import transaction, which still enforces the
+    constraint itself: a title created by a concurrent writer in between fails
+    closed, with no partial write.
+    """
+
+    title = hermes.bundle_title(artifact.native_bytes)
+    if not title:
+        return artifact
+    database = target_home.expanduser() / hermes.HERMES_STATE_FILENAME
+    if not hermes.title_taken(database, title):
+        return artifact
+    dropped = dict(artifact.dropped)
+    dropped["title:duplicate_in_target"] = 1
+    return replace(
+        artifact,
+        native_bytes=hermes.without_title(artifact.native_bytes),
+        dropped=dropped,
+        warnings=(
+            *artifact.warnings,
+            {
+                "code": "target_title_omitted",
+                "title": title,
+                "message": (
+                    "target store already holds this title; the session was installed "
+                    "without one"
+                ),
+            },
+        ),
+    )
+
+
 def install_hermes_artifact(
     artifact: ConversionArtifact,
     *,
@@ -1265,6 +1307,8 @@ def install_hermes_artifact(
 
     if artifact.target_format != TargetFormat.HERMES:
         raise SessionMigrateError("Hermes installation requires a Hermes artifact")
+
+    artifact = _resolve_hermes_title_conflict(artifact, target_home=target_home)
 
     def install(simulate: bool) -> Path:
         result = hermes.install_bundle(

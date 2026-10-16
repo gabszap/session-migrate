@@ -1221,6 +1221,72 @@ def _assert_no_collision(database: Path, session_id: str) -> None:
             raise SessionMigrateError("Hermes session ID already exists; refusing to overwrite it")
 
 
+def title_taken(database: Path, title: str | None) -> bool:
+    """Report whether *title* is already held by a session in this store.
+
+    Hermes keeps ``idx_sessions_title_unique`` (a partial unique index over
+    non-null titles), so a second session cannot reuse one.  The title is
+    cosmetic — Hermes's own importer discards it on conflict — so a caller can
+    install without it rather than lose the whole migration.
+
+    The lookup is advisory: the import transaction still enforces the real
+    constraint.  A missing, unreadable, or concurrently written store reports
+    ``False`` and leaves the decision to that transaction.
+    """
+
+    if not title:
+        return False
+    if not os.path.lexists(database):
+        return False
+    uri = f"file:{quote(str(database), safe='/')}?mode=ro"
+    connection = None
+    try:
+        connection = sqlite3.connect(uri, uri=True, timeout=5)
+        connection.execute("PRAGMA trusted_schema=OFF")
+        row = connection.execute("SELECT 1 FROM sessions WHERE title = ?", (title,)).fetchone()
+    except (OSError, sqlite3.Error):
+        return False
+    finally:
+        if connection is not None:
+            connection.close()
+    return row is not None
+
+
+def without_title(data: bytes) -> bytes:
+    """Return Hermes bundle bytes whose session carries no title.
+
+    Only the title changes: every other field of the validated envelope is
+    re-emitted byte-identically in meaning, and the result is re-validated by
+    the installer before it is used.
+    """
+
+    value = _bundle_object(data)
+    value["session"]["title"] = None
+    return json.dumps(value, separators=(",", ":"), sort_keys=True, ensure_ascii=False).encode()
+
+
+def bundle_title(data: bytes) -> str | None:
+    """Title carried by a Hermes bundle, when it has one."""
+
+    return _safe_text(_bundle_object(data)["session"].get("title"), "Hermes title")
+
+
+def _bundle_object(data: bytes) -> dict[str, Any]:
+    """Strictly parse a bundle envelope without re-running full validation."""
+
+    try:
+        value = json.loads(
+            data,
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as exc:
+        raise SessionMigrateError("generated Hermes bundle is not valid strict UTF-8 JSON") from exc
+    if not isinstance(value, dict) or not isinstance(value.get("session"), dict):
+        raise SessionMigrateError("generated Hermes bundle has no session to adjust")
+    return value
+
+
 def _script_interpreter(executable: Path) -> Path:
     try:
         with executable.open("rb") as stream:

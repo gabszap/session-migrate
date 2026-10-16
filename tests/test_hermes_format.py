@@ -562,6 +562,55 @@ def test_hermes_snapshot_includes_uncheckpointed_wal_commit(tmp_path: Path) -> N
         )
 
 
+def test_hermes_bundle_title_helpers_report_and_clear_only_the_title(tmp_path: Path) -> None:
+    session = _portable_session(tmp_path)
+    data, _ = hermes.serialize(
+        session,
+        session_id=NATIVE_ID,
+        cwd=tmp_path,
+        timestamp="2026-08-30T12:34:56Z",
+        title=session.title,
+    )
+    assert hermes.bundle_title(data) == session.title
+
+    adjusted = hermes.without_title(data)
+    parsed = hermes.validate_native_bytes(adjusted, NATIVE_ID)
+    original = hermes.validate_native_bytes(data, NATIVE_ID)
+    assert parsed.title is None
+    assert hermes.bundle_title(adjusted) is None
+    # Only the title changes: the envelope keeps every other field and message.
+    assert parsed.session_id == original.session_id
+    assert parsed.cwd == original.cwd
+    assert parsed.started_at == original.started_at
+    assert parsed.model == original.model
+    assert parsed.messages == original.messages
+    before, after = json.loads(data), json.loads(adjusted)
+    before["session"].pop("title")
+    after["session"].pop("title")
+    assert before == after
+
+
+def test_hermes_title_taken_matches_only_a_stored_non_null_title(tmp_path: Path) -> None:
+    store = tmp_path / "state.db"
+    db = _create_store(store)
+    _insert_session(db, NATIVE_ID, title="Título já usado")
+    db.execute(
+        """INSERT INTO sessions(id,source,started_at,message_count,title,archived,hidden)
+           VALUES (?, 'cli', ?, 0, NULL, 0, 0)""",
+        (SECOND_ID, 1_788_093_296.0),
+    )
+    db.commit()
+    db.close()
+
+    assert hermes.title_taken(store, "Título já usado") is True
+    assert hermes.title_taken(store, "outro título") is False
+    assert hermes.title_taken(store, None) is False
+    assert hermes.title_taken(store, "") is False
+    # A store that does not exist yet cannot hold a title, and an unreadable one
+    # leaves the decision to the import transaction.
+    assert hermes.title_taken(tmp_path / "missing.db", "Título já usado") is False
+
+
 def test_hermes_rejects_symlink_and_unsupported_schema(tmp_path: Path) -> None:
     path = _native_store(tmp_path / "native")
     link = tmp_path / "linked.db"

@@ -161,6 +161,32 @@ constructor; and the identity-guard descriptor that reserves the manifest is
 closed before a rollback unlinks it, because Windows refuses to delete a file
 that still has an open handle (`WinError 32`).
 
+### Titles are unique per store
+
+Hermes enforces a partial unique index over non-null titles:
+
+```sql
+CREATE UNIQUE INDEX idx_sessions_title_unique ON sessions(title) WHERE title IS NOT NULL
+```
+
+A second session therefore cannot reuse a title, and the native importer treats
+the field as cosmetic: it wraps its own title write in a suppressed exception
+and leaves the conflicting session untitled. Before this change the migrator
+inherited the raw refusal, so migrating the same conversation twice into one
+home — or migrating two sessions whose first message produced the same title —
+failed the whole bundle with `UNIQUE constraint failed: sessions.title`.
+
+The installer now samples the target store first and, when the title is already
+taken, drops it from the bundle before the native import. The migration
+succeeds, the manifest records the omission as the `title:duplicate_in_target`
+counter plus a `target_title_omitted` warning, and the session appears in the
+native picker without a title. Only the cosmetic field is removed: the envelope,
+its messages, and the record count are unchanged.
+
+The sample is advisory. It runs before the import transaction, which still
+enforces the constraint itself, so a title created by a concurrent writer in
+between fails closed exactly as before, with no partial session.
+
 Resume uses Hermes's native command:
 
 ```bash
@@ -181,6 +207,7 @@ unambiguous session ID.
 | Compaction boundary/replacement metadata | summary kept; metadata counted | Hermes stores the active summary, not portable boundary semantics |
 | Rewound or already compacted bodies | opaque accounting only | not part of Hermes's active model replay |
 | Token/cost/runtime counters | reset | derived native runtime state |
+| Session title already held by the target store | installed untitled; counted | Hermes allows one session per non-null title |
 
 ## Native research trajectories
 
