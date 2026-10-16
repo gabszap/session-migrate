@@ -6,6 +6,11 @@ here. Native format compatibility is documented separately in
 
 ## Unreleased
 
+- Install a Hermes session untitled instead of refusing the migration when the
+  target store already holds that title: Hermes enforces a partial unique index
+  over non-null titles, and its own importer treats the field as cosmetic. The
+  omission is counted as `title:duplicate_in_target` and reported as a
+  `target_title_omitted` manifest warning.
 - Promote the Hermes Agent adapter to 0.22.2 (tag `v2026.9.24`) and SQLite
   schema 31, keeping `SessionDB.import_sessions` as the native write boundary.
 - Resolve the 0.22.2 runtime through `hermes --print-runtime-command` and

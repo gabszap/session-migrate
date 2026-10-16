@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -33,6 +34,7 @@ from session_migrate.formats import (
     copilot,
     cursor,
     grok,
+    hermes,
     kilo,
     omp,
     opencode,
@@ -219,6 +221,63 @@ def test_cli_parser_accepts_every_target_and_expands_target_cli(
         ]
     )
     assert imported.target_cli == tmp_path / ".opencode/bin/opencode"
+
+
+def hermes_artifact(tmp_path: Path, *, title: str | None) -> conversion.ConversionArtifact:
+    return convert_session(
+        replace(source_session(), title=title),
+        ConversionOptions(
+            target_format=TargetFormat.HERMES,
+            session_id=TARGET_UUID,
+            cwd=tmp_path,
+        ),
+    )
+
+
+def test_hermes_duplicate_target_title_is_omitted_counted_and_never_refused(
+    tmp_path: Path,
+) -> None:
+    """A title already present in the target store must not refuse the migration.
+
+    Hermes enforces a partial unique index over non-null session titles, so a
+    second session cannot reuse one, while its own importer treats the title as
+    cosmetic.  The migrator installs without it and counts the omission.
+    """
+
+    title = "Investigar timeout do Postgres"
+    artifact = hermes_artifact(tmp_path, title=title)
+    assert hermes.bundle_title(artifact.native_bytes) == title
+
+    home = tmp_path / "hermes-home"
+    home.mkdir(parents=True, exist_ok=True)
+    database = sqlite3.connect(home / "state.db")
+    database.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT)")
+    database.execute("INSERT INTO sessions VALUES (?, ?)", (artifact.session_id, title))
+    database.commit()
+    database.close()
+
+    resolved = conversion._resolve_hermes_title_conflict(artifact, target_home=home)
+    assert resolved is not artifact
+    assert resolved.dropped == {**artifact.dropped, "title:duplicate_in_target": 1}
+    assert resolved.warnings[:-1] == artifact.warnings
+    assert resolved.warnings[-1]["code"] == "target_title_omitted"
+    assert resolved.warnings[-1]["title"] == title
+    assert hermes.bundle_title(resolved.native_bytes) is None
+    hermes.validate_native_bytes(resolved.native_bytes, artifact.session_id)
+    resolved_manifest = resolved.manifest(output_path=tmp_path)
+    original_manifest = artifact.manifest(output_path=tmp_path)
+    assert resolved_manifest["target"]["sha256"] != original_manifest["target"]["sha256"]
+    assert resolved_manifest["target"]["records"] == original_manifest["target"]["records"]
+    assert resolved_manifest["dropped_events"] == {
+        **original_manifest["dropped_events"],
+        "title:duplicate_in_target": 1,
+    }
+
+    # A free title, or a session with no title, keeps the bundle as generated.
+    empty_home = tmp_path / "empty-home"
+    assert conversion._resolve_hermes_title_conflict(artifact, target_home=empty_home) is artifact
+    untitled = hermes_artifact(tmp_path / "untitled", title=None)
+    assert conversion._resolve_hermes_title_conflict(untitled, target_home=home) is untitled
 
 
 @pytest.mark.parametrize(
