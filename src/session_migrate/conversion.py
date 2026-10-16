@@ -1680,6 +1680,11 @@ def install_opencode_artifact(
             manifest_bytes,
         )
     except BaseException as exc:
+        # Windows refuses to delete a file that still has an open handle, so release
+        # the identity guard *before* the rollback unlink.  Otherwise the cleanup
+        # error replaces the failure that triggered the rollback and the user never
+        # learns why finalization stopped, although the native import already ran.
+        reservation_guard = _close_guard(reservation_guard)
         if reservation_identity is not None:
             _unlink_if_identity_matches(manifest_path, reservation_identity)
         if import_succeeded:
@@ -1772,6 +1777,8 @@ def install_kilo_artifact(
             manifest_bytes,
         )
     except BaseException as exc:
+        # Same Windows rule as the OpenCode path: close the guard before unlinking.
+        reservation_guard = _close_guard(reservation_guard)
         if reservation_identity is not None:
             _unlink_if_identity_matches(manifest_path, reservation_identity)
         if import_succeeded:
