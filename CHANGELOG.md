@@ -4,7 +4,7 @@ All notable changes to `session-migrate` are recorded
 here. Native format compatibility is documented separately in
 [`docs/format-compatibility.md`](docs/format-compatibility.md).
 
-## Unreleased
+## 0.12.0 - 2026-10-16
 
 - Resolve the Hermes home the way the CLI does: `HERMES_HOME` when set,
   otherwise `%LOCALAPPDATA%\hermes` on Windows and `~/.hermes` elsewhere. A bare
