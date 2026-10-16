@@ -1,4 +1,4 @@
-"""Opt-in pinned-source native trajectory for Hermes Agent 0.20.6."""
+"""Opt-in pinned-source native trajectory for Hermes Agent 0.22.2."""
 
 import json
 import os
@@ -165,7 +165,7 @@ def _environment(home: Path, source: Path) -> dict[str, str]:
 def test_hermes_0206_import_resume_replay_append_and_compaction(tmp_path: Path) -> None:
     source_value = os.environ.get("SESSION_MIGRATE_HERMES_SOURCE")
     if not source_value:
-        pytest.skip("set SESSION_MIGRATE_HERMES_SOURCE to the exact v2026.8.27 source checkout")
+        pytest.skip("set SESSION_MIGRATE_HERMES_SOURCE to the exact v2026.9.24 source checkout")
     source = Path(source_value).resolve()
     binary_value = os.environ.get("SESSION_MIGRATE_HERMES_BIN")
     binary = Path(binary_value).resolve() if binary_value else source / ".venv/bin/hermes"

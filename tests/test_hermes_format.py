@@ -100,7 +100,7 @@ def _portable_session(tmp_path: Path) -> Session:
     )
 
 
-def _create_store(path: Path, *, schema_version: int = 26) -> sqlite3.Connection:
+def _create_store(path: Path, *, schema_version: int = 31) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(path)
     db.executescript(
@@ -573,5 +573,5 @@ def test_hermes_rejects_symlink_and_unsupported_schema(tmp_path: Path) -> None:
     db = _create_store(old, schema_version=25)
     db.commit()
     db.close()
-    with pytest.raises(JsonlError, match="expected 26"):
+    with pytest.raises(JsonlError, match="expected 31"):
         hermes.list_sessions(old)
