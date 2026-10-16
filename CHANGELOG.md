@@ -4,6 +4,13 @@ All notable changes to `session-migrate` are recorded
 here. Native format compatibility is documented separately in
 [`docs/format-compatibility.md`](docs/format-compatibility.md).
 
+## Unreleased
+
+- Add version-aware OpenCode 2.0 public session transfer support, retaining the
+  legacy 1.17.20 adapter and native no-overwrite/dry-run controls. Preserve
+  portable tools, inline media, and completed compaction summaries, and account
+  for incomplete tools and provider-private state.
+
 ## 0.12.1 - 2026-10-16
 
 - Accept the compaction loop Claude Code records when the compact summary is not
@@ -58,10 +65,6 @@ here. Native format compatibility is documented separately in
   wire formats, Connect-RPC interfaces, and collision invariants in
   `docs/antigravity-desktop-format.md`.
 
-- Add version-aware OpenCode 2.0 public session transfer support, retaining the
-  legacy 1.17.20 adapter and native no-overwrite/dry-run controls. Preserve
-  portable tools, inline media, and completed compaction summaries, and account
-  for incomplete tools and provider-private state.
 
 ## 0.11.0 - 2026-09-11
 
