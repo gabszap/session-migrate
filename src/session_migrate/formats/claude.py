@@ -438,20 +438,20 @@ def _valid_preserved_compaction_back_edge(
 ) -> bool:
     """Recognize Claude's metadata-declared preserved-segment loop.
 
-    Two layouts carry this declaration.  In the original one the compact summary
-    is a *direct* child of the boundary, so the tail walks up through the
-    preserved head into the summary and the summary's parent is the boundary.
-    Claude Code 2.1.300 keeps the summary *inside* the preserved chain — the
-    boundary is followed by attachment records, then the summary, then the tail —
-    and ``preservedMessages`` lists ids from the summarized branch that are no
-    longer on the active path alongside the preserved ones.
+    The declaration is stable, the shape under it is not: the number of records
+    between the boundary and the compact summary varies with the attachment
+    records the CLI interleaves (an environment snapshot, a file read), so the
+    summary is sometimes the boundary's direct child and sometimes three or four
+    parent hops below it.  One 73 MB session with two compactions carried both
+    shapes.  ``preservedMessages`` likewise names ids from the summarized branch
+    that are no longer on the active path, next to the preserved ones.
 
     Accept the edge when the declaration closes over the walked path: the tail
     must lead up to the summary, the summary must lead up to the boundary, and
     every hop must already be on the walked path.  Requiring the summary to be
     the boundary's direct child, or every declared id to be on the path, refuses
-    readable transcripts (a real 73 MB session with two compactions raised
-    "ancestry cycle" for exactly this reason).
+    readable transcripts — that session raised "ancestry cycle" for exactly this
+    reason.
     """
 
     metadata = boundary.value.get("compactMetadata")
