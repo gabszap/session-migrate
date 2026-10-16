@@ -691,6 +691,8 @@ def _cli_report(path: Path, values: Mapping[str, str], *arguments: str) -> str:
             timeout=30,
             check=False,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise SessionMigrateError("cannot query the Hermes version") from exc
@@ -772,32 +774,26 @@ def install_bundle(
 
     helper = (
         "import json,sys; from pathlib import Path; from hermes_state import SessionDB; "
-        "value=json.load(sys.stdin); db=SessionDB(db_path=Path(sys.argv[1])); "
+        "value=json.loads(sys.stdin.buffer.read()); db=SessionDB(db_path=Path(sys.argv[1])); "
         "result=db.import_sessions([value['session']]); db.close(); "
         "print(json.dumps(result,separators=(',',':')))"
     )
     try:
-        imported = subprocess.run(
-            [*prefix, prelude + helper, str(database)],
-            env=environment,
-            input=data.decode(),
-            capture_output=True,
-            timeout=120,
-            check=False,
-            text=True,
+        code, stdout, stderr = _run_helper(
+            prefix, prelude, helper, database=database, payload=data, environment=environment
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise SessionMigrateError("Hermes session import failed") from exc
-    result = _last_json_object(imported.stdout)
+    result = _last_json_object(stdout)
     if (
-        imported.returncode != 0
+        code != 0
         or result.get("ok") is not True
         or result.get("imported_ids") != [parsed.session_id]
         or result.get("skipped") != 0
     ):
         detail = result.get("errors")
-        if not detail and imported.stderr:
-            detail = imported.stderr.splitlines()[-1][:500]
+        if not detail and stderr:
+            detail = stderr.splitlines()[-1][:500]
         suffix = f": {detail}" if detail else ""
         raise SessionMigrateError(f"Hermes refused the imported session bundle{suffix}")
     loaded = parse_session(database, parsed.session_id)
@@ -821,21 +817,54 @@ def _initialize_state_database(
         "db=SessionDB(db_path=Path(sys.argv[1])); db.close()"
     )
     try:
-        initialized = subprocess.run(
-            [*prefix, prelude + helper, str(database)],
-            env=dict(environment),
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=120,
-            check=False,
-            text=True,
+        code, _, stderr = _run_helper(
+            prefix, prelude, helper, database=database, payload=None, environment=environment
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise SessionMigrateError("cannot initialize the Hermes state database") from exc
-    if initialized.returncode != 0 or not database.is_file():
-        detail = initialized.stderr.splitlines()[-1][:500] if initialized.stderr else ""
+    if code != 0 or not database.is_file():
+        detail = stderr.splitlines()[-1][:500] if stderr else ""
         suffix = f": {detail}" if detail else ""
         raise SessionMigrateError(f"Hermes failed to initialize its state database{suffix}")
+
+
+def _run_helper(
+    prefix: list[str],
+    prelude: str,
+    source: str,
+    *,
+    database: Path,
+    payload: bytes | None,
+    environment: Mapping[str, str],
+) -> tuple[int, str, str]:
+    """Run one helper inside the Hermes runtime, moving any payload as bytes.
+
+    The bundle crosses the process boundary as UTF-8 bytes and the helper reads
+    ``sys.stdin.buffer``.  Passing it as text instead encodes it with the
+    *caller's* locale codec while the store's interpreter always decodes UTF-8,
+    so a Windows console whose code page is not UTF-8 replaced every non-ASCII
+    character with U+FFFD inside the target store.  Both directions are decoded
+    explicitly here for the same reason.
+    """
+
+    arguments: dict[str, Any] = {}
+    if payload is None:
+        arguments["stdin"] = subprocess.DEVNULL
+    else:
+        arguments["input"] = payload
+    completed = subprocess.run(
+        [*prefix, prelude + source, str(database)],
+        env=dict(environment),
+        capture_output=True,
+        timeout=120,
+        check=False,
+        **arguments,
+    )
+    return (
+        completed.returncode,
+        completed.stdout.decode("utf-8", "replace"),
+        completed.stderr.decode("utf-8", "replace"),
+    )
 
 
 def _message_events(row: sqlite3.Row, index: int) -> list[Event]:
@@ -1349,6 +1378,8 @@ def _runtime_command(
             timeout=30,
             check=False,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -1419,8 +1450,8 @@ def _python_invocation(
         if root is not None:
             prelude.append(f"sys.path.insert(0,{str(root)!r})")
         prelude.append("import hermes_bootstrap")
-        return [str(interpreter), "-I", "-c"], "; ".join(prelude) + "; "
-    return [str(_script_interpreter(executable)), "-c"], ""
+        return [str(interpreter), "-I", "-X", "utf8", "-c"], "; ".join(prelude) + "; "
+    return [str(_script_interpreter(executable)), "-X", "utf8", "-c"], ""
 
 
 def _subprocess_environment(

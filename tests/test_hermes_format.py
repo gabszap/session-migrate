@@ -1,6 +1,7 @@
 import json
 import os
 import sqlite3
+import subprocess
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -609,6 +610,57 @@ def test_hermes_title_taken_matches_only_a_stored_non_null_title(tmp_path: Path)
     # A store that does not exist yet cannot hold a title, and an unreadable one
     # leaves the decision to the import transaction.
     assert hermes.title_taken(tmp_path / "missing.db", "Título já usado") is False
+
+
+def test_hermes_install_helper_moves_the_bundle_as_utf8_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bundle must cross the process boundary as bytes, never as locale text.
+
+    Encoding it as text uses the *caller's* codec while the store interpreter
+    always decodes UTF-8, so a Windows console whose code page is not UTF-8
+    replaced every non-ASCII character with U+FFFD inside the target store.  The
+    helper reads ``sys.stdin.buffer`` and the caller decodes stdout/stderr
+    explicitly for the same reason.
+    """
+
+    home = tmp_path / "hermes-home"
+    home.mkdir()
+    database = home / "state.db"
+    store = _create_store(database)
+    store.commit()
+    store.close()
+
+    payload = "Instalação — ação".encode()
+    captured: dict[str, object] = {}
+
+    def fake_run(command: list[str], **kwargs: object) -> object:
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(
+            command, 0, stdout=b'{"ok":true,"imported":1,"skipped":0,"imported_ids":[]}', stderr=b""
+        )
+
+    monkeypatch.setattr(hermes.subprocess, "run", fake_run)
+    hermes._run_helper(
+        ["python", "-I", "-X", "utf8", "-c"],
+        "import os,sys; ",
+        "import json,sys; value=json.loads(sys.stdin.buffer.read())",
+        database=database,
+        payload=payload,
+        environment={"HERMES_HOME": str(home)},
+    )
+
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs.get("input") == payload
+    assert isinstance(kwargs.get("input"), bytes)
+    assert kwargs.get("text") is None
+    assert "stdin" not in kwargs
+    command = captured["command"]
+    assert isinstance(command, list)
+    assert "sys.stdin.buffer.read()" in command[-2]
+    assert str(database) == command[-1]
 
 
 def test_hermes_rejects_symlink_and_unsupported_schema(tmp_path: Path) -> None:

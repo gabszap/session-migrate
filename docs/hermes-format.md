@@ -154,6 +154,13 @@ Two platform facts are handled explicitly:
   `PATHEXT`, `COMSPEC`, `TEMP`, `TMP` and `NUMBER_OF_PROCESSORS` alongside the
   POSIX variables; `HOME` is mirrored into `USERPROFILE` when the caller
   redirects the home through `HOME` only.
+- **The bundle crosses the process boundary as bytes.** The helper reads
+  `sys.stdin.buffer` and the caller decodes stdout/stderr explicitly as UTF-8;
+  the child interpreter is started with `-X utf8`. Passing the payload as *text*
+  encoded it with the caller's locale codec while the store's interpreter always
+  decodes UTF-8, so a Windows console whose code page is not UTF-8 replaced
+  every non-ASCII character in the imported conversation — title and message
+  bodies alike — with `U+FFFD`. Both directions are now codec-independent.
 
 Installation summary: `hermes sessions list` no longer creates `state.db` on a
 read of an absent store, so initialization moved to the native `SessionDB`
