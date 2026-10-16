@@ -174,13 +174,13 @@ if want vibe; then
 fi
 
 if want hermes; then
-  hermes_archive="$native_root/hermes-agent-5fc308a7.tar.gz"
-  if ! verify 8710e0017792e78369a7da3d96c16141f0787374285f1a6cf6f80d29b7b9ea2c \
+  hermes_archive="$native_root/hermes-agent-d923a5eb.tar.gz"
+  if ! verify 616649f8ac7e3bb186999d000d77511e733b3930bd2b5921be4a85673320ef8b \
     "$hermes_archive" 2>/dev/null; then
     curl --fail --location --silent --show-error --retry 3 --output "$hermes_archive" \
-      'https://codeload.github.com/NousResearch/hermes-agent/tar.gz/5fc308a70719a83cccdbba4c0e39c23f5a8239d5'
+      'https://codeload.github.com/NousResearch/hermes-agent/tar.gz/d923a5eb487a17c0a68801bba9ef0f56c81040a8'
   fi
-  verify 8710e0017792e78369a7da3d96c16141f0787374285f1a6cf6f80d29b7b9ea2c \
+  verify 616649f8ac7e3bb186999d000d77511e733b3930bd2b5921be4a85673320ef8b \
     "$hermes_archive"
   mkdir -p "$native_root/hermes"
   tar -xzf "$hermes_archive" --strip-components=1 -C "$native_root/hermes"
@@ -189,7 +189,7 @@ if want hermes; then
     --directory "$native_root/hermes" --frozen --no-dev --python 3.13
   record SESSION_MIGRATE_HERMES_SOURCE "$native_root/hermes"
   record SESSION_MIGRATE_HERMES_BIN "$native_root/hermes/.venv/bin/hermes"
-  record SESSION_MIGRATE_HERMES_REVISION 5fc308a70719a83cccdbba4c0e39c23f5a8239d5
+  record SESSION_MIGRATE_HERMES_REVISION d923a5eb487a17c0a68801bba9ef0f56c81040a8
 fi
 
 path_entries=()

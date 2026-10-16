@@ -187,7 +187,7 @@ def _environment(home: Path, source: Path) -> dict[str, str]:
     return environment
 
 
-def test_hermes_0206_import_resume_replay_append_and_compaction(tmp_path: Path) -> None:
+def test_hermes_0222_import_resume_replay_append_and_compaction(tmp_path: Path) -> None:
     source_value = os.environ.get("SESSION_MIGRATE_HERMES_SOURCE")
     if not source_value:
         pytest.skip("set SESSION_MIGRATE_HERMES_SOURCE to the exact v2026.9.24 source checkout")
