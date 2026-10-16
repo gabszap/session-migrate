@@ -235,7 +235,7 @@ class Handler(BaseHTTPRequestHandler):
 def test_hermes_fixture_cold_reloads_and_continues_in_exact_client(tmp_path: Path) -> None:
     source_value = os.environ.get("SESSION_MIGRATE_HERMES_SOURCE")
     if not source_value:
-        pytest.skip("set SESSION_MIGRATE_HERMES_SOURCE to exact v2026.8.27 source")
+        pytest.skip("set SESSION_MIGRATE_HERMES_SOURCE to exact v2026.9.24 source")
     source = Path(source_value).resolve()
     binary = Path(
         os.environ.get("SESSION_MIGRATE_HERMES_BIN", str(source / ".venv/bin/hermes"))
