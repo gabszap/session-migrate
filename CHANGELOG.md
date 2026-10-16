@@ -6,6 +6,37 @@ here. Native format compatibility is documented separately in
 
 ## Unreleased
 
+- Promote the Hermes Agent adapter to 0.22.2 (tag `v2026.9.24`) and SQLite
+  schema 31, keeping `SessionDB.import_sessions` as the native write boundary,
+  and resolve the 0.22.2 runtime through `hermes --print-runtime-command`
+  instead of the launcher file head.
+- Resolve the Hermes home the way the CLI does: `HERMES_HOME` when it is set,
+  otherwise `%LOCALAPPDATA%\hermes` on Windows and `~/.hermes` elsewhere. A bare
+  `~/.hermes` on Windows named a directory the CLI never writes to, so an
+  install landed outside the real store unless the caller exported the variable.
+- Install a Hermes session untitled instead of refusing the migration when the
+  target store already holds its title (`target_title_omitted`): the store's
+  unique index over non-null titles is partial and its own importer treats the
+  field as cosmetic.
+- Move the Hermes import bundle across the process boundary as UTF-8 bytes
+  (`sys.stdin.buffer`, explicit stdout/stderr decoding, `-X utf8` child) instead
+  of locale-encoded text. On a console whose code page is not UTF-8 the old path
+  replaced every non-ASCII character in the imported conversation with `U+FFFD`.
+- Raise the store's per-session import budget to what the bundle needs, never
+  past the ceiling its own web import accepts, and report
+  `target_import_budget_raised` in the manifest instead of refusing a session
+  that carries pasted screenshots (inline base64 images).
+- Accept the compaction loop Claude Code records when the compact summary is not
+  the boundary's direct child: the declaration is validated instead of the shape
+  one build happens to emit, and a declaration that does not close still fails.
+- Fold unsigned Windows `st_dev`/`st_ino` stat identity into SQLite's signed
+  range, which otherwise failed every SQLite-backed catalog root with
+  `scan_failed`.
+- Close the manifest identity guard before a rollback unlink in every
+  shared-database install path: Windows refuses to delete a file that still has
+  an open handle, and that cleanup error masked the failure that triggered the
+  rollback.
+
 ## 0.11.0 - 2026-09-11
 
 - Read root Codex rollouts written with `history_mode: "paginated"` by using
