@@ -276,6 +276,121 @@ def test_claude_compaction_logical_back_edge_terminates_cycle(tmp_path: Path) ->
     ]
 
 
+def test_claude_compaction_summary_inside_the_chain_terminates_the_loop(tmp_path: Path) -> None:
+    """Claude Code 2.1.300 parks the compact summary below the boundary, not under it.
+
+    Reproduced from a real 73 MB session with two compactions: the boundary is
+    followed by attachment records, then the summary, then the preserved tail,
+    and ``preservedMessages`` also names ids from the summarized branch that are
+    no longer on the active path.  Demanding that the summary be the boundary's
+    direct child, and that every declared id be walked, refused the session as an
+    "ancestry cycle" even though its active graph is intact.
+    """
+
+    cwd = str(tmp_path)
+    summary = claude_record("user", "summary", "att-a", "summary text", cwd=cwd)
+    summary["isCompactSummary"] = True
+    path = write_jsonl(
+        tmp_path / "claude-compaction-nested-summary.jsonl",
+        [
+            {
+                "type": "system",
+                "subtype": "compact_boundary",
+                "uuid": "boundary",
+                "parentUuid": None,
+                "logicalParentUuid": "tail",
+                "sessionId": "11111111-1111-4111-8111-111111111111",
+                "timestamp": "2026-08-17T12:00:01Z",
+                "cwd": cwd,
+                "version": "2.1.300",
+                "compactMetadata": {
+                    "preservedSegment": {
+                        "anchorUuid": "summary",
+                        "headUuid": "summarized",
+                        "tailUuid": "tail",
+                    },
+                    "preservedMessages": {
+                        "uuids": ["summarized", "tail"],
+                        "allUuids": ["summarized", "tail"],
+                    },
+                },
+            },
+            {
+                "type": "attachment",
+                "uuid": "att-a",
+                "parentUuid": "boundary",
+                "isSidechain": False,
+                "sessionId": "11111111-1111-4111-8111-111111111111",
+                "timestamp": "2026-08-17T12:00:02Z",
+                "cwd": cwd,
+                "attachment": {"type": "environment", "snapshot": {"workingDirectory": cwd}},
+            },
+            summary,
+            claude_record("user", "tail", "summary", "tail text", cwd=cwd),
+            claude_record("assistant", "leaf", "tail", "leaf text", cwd=cwd),
+            # The declared head stays on the summarized branch the walk never enters.
+            claude_record("assistant", "summarized", None, "old turn", cwd=cwd),
+            {"type": "last-prompt", "leafUuid": "leaf"},
+        ],
+    )
+
+    session = claude.parse(path)
+
+    # The walk stops at the boundary instead of refusing, and the surviving
+    # timeline keeps the summary, the preserved tail, and the new turns.
+    assert session.event_counts() == {"compaction": 2, "message": 2, "opaque": 2}
+    assert [event.text for event in session.events if event.text] == [
+        "summary text",
+        "tail text",
+        "leaf text",
+    ]
+
+
+def test_claude_compaction_back_edge_without_a_closed_declaration_is_refused(
+    tmp_path: Path,
+) -> None:
+    """A boundary whose declaration does not close over the walk is still fatal."""
+
+    cwd = str(tmp_path)
+    summary = claude_record("user", "summary", "boundary", "summary text", cwd=cwd)
+    summary["isCompactSummary"] = True
+    path = write_jsonl(
+        tmp_path / "claude-compaction-unclosed.jsonl",
+        [
+            {
+                "type": "system",
+                "subtype": "compact_boundary",
+                "uuid": "boundary",
+                "parentUuid": None,
+                "logicalParentUuid": "tail",
+                "sessionId": "11111111-1111-4111-8111-111111111111",
+                "timestamp": "2026-08-17T12:00:01Z",
+                "cwd": cwd,
+                "version": "2.1.300",
+                "compactMetadata": {
+                    "preservedSegment": {
+                        "anchorUuid": "summary",
+                        "headUuid": "tail",
+                        "tailUuid": "elsewhere",
+                    },
+                    "preservedMessages": {
+                        "uuids": ["tail", "elsewhere"],
+                        "allUuids": ["tail", "elsewhere"],
+                    },
+                },
+            },
+            summary,
+            claude_record("assistant", "mid", "summary", "mid text", cwd=cwd),
+            claude_record("user", "tail", "mid", "tail text", cwd=cwd),
+            claude_record("assistant", "leaf", "tail", "leaf text", cwd=cwd),
+            {"type": "last-prompt", "leafUuid": "leaf"},
+        ],
+    )
+
+    with pytest.raises(SessionMigrateError, match="ancestry cycle"):
+        claude.parse(path)
+
+
 def test_claude_to_codex_preserves_messages_and_tools(tmp_path: Path) -> None:
     cwd = str(tmp_path)
     source_path = write_jsonl(
