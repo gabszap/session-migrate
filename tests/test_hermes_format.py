@@ -696,6 +696,31 @@ def test_hermes_home_matches_the_native_cli_platform_default(tmp_path: Path) -> 
     )
 
 
+def test_hermes_import_budget_covers_a_bundle_the_store_caps_by_default() -> None:
+    """A bundle the store's 5 MiB per-session cap rejects raises the budget instead.
+
+    Hermes caps one session at 5 MiB on import while its own web import accepts
+    25 MiB, so a session carrying pasted screenshots is refused although nothing
+    about it is invalid.  Size the bundle the way the store does, request the
+    smallest budget that fits, and never pass the vendor's own ceiling.
+    """
+
+    assert hermes.import_budget_bytes(0) == hermes.PINNED_HERMES_IMPORT_SESSION_BYTES
+    assert hermes.import_budget_bytes(1024) == hermes.PINNED_HERMES_IMPORT_SESSION_BYTES
+    assert hermes.import_budget_bytes(6 * 1024 * 1024) == 6 * 1024 * 1024
+    assert hermes.import_budget_bytes(900 * 1024 * 1024) == hermes.PINNED_HERMES_IMPORT_CEILING_BYTES
+
+    # `timings` is derived on export and never counts against the content budget.
+    session = {"id": "20260830_123456_abcdef", "messages": [{"content": "á"}], "timings": [{"x": "y" * 4096}]}
+    sized = hermes.measured_session_bytes(session)
+    assert sized == len(json.dumps(
+        {"id": "20260830_123456_abcdef", "messages": [{"content": "á"}]},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8"))
+    assert sized < len(json.dumps(session, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
 def test_hermes_rejects_symlink_and_unsupported_schema(tmp_path: Path) -> None:
     path = _native_store(tmp_path / "native")
     link = tmp_path / "linked.db"

@@ -1420,6 +1420,25 @@ def install_hermes_artifact(
         raise SessionMigrateError("Hermes installation requires a Hermes artifact")
 
     artifact = _resolve_hermes_title_conflict(artifact, target_home=target_home)
+    measured = hermes.measured_session_bytes(json.loads(artifact.native_bytes)["session"])
+    if measured > hermes.PINNED_HERMES_IMPORT_SESSION_BYTES:
+        artifact = replace(
+            artifact,
+            warnings=(
+                *artifact.warnings,
+                {
+                    "code": "target_import_budget_raised",
+                    "session_bytes": measured,
+                    "default_bytes": hermes.PINNED_HERMES_IMPORT_SESSION_BYTES,
+                    "budget_bytes": hermes.import_budget_bytes(measured),
+                    "message": (
+                        "the target store's per-session import cap was raised to fit this "
+                        "bundle, which carries inline image data; the store's own web import "
+                        "applies the same ceiling"
+                    ),
+                },
+            ),
+        )
 
     def install(simulate: bool) -> Path:
         result = hermes.install_bundle(
