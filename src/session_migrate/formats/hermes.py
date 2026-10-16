@@ -1,11 +1,12 @@
-"""Hermes Agent 0.20.6 SQLite session adapter.
+"""Hermes Agent 0.22.2 SQLite session adapter.
 
 Hermes keeps every CLI conversation in ``$HERMES_HOME/state.db`` (normally
-``~/.hermes/state.db``).  A single database contains many sessions, so source
-selection is always the pair ``(state.db, native session id)``.  Target bytes
-use Hermes's own exported-session shape inside a small versioned envelope;
-installation delegates the final transaction to the pinned Hermes
-``SessionDB.import_sessions`` implementation.
+``~/.hermes``; on Windows ``%LOCALAPPDATA%\\hermes``).  A single database
+contains many sessions, so source selection is always the pair ``(state.db,
+native session id)``.  Target bytes use Hermes's own exported-session shape
+inside a small versioned envelope; installation delegates the final
+transaction to the pinned Hermes ``SessionDB.import_sessions`` implementation,
+which is still the native portability boundary in 0.22.2.
 """
 
 from __future__ import annotations
@@ -34,10 +35,10 @@ from session_migrate.formats.common import content_text, portable_data_image, st
 from session_migrate.jsonl import DEFAULT_MAX_RECORDS, DEFAULT_MAX_TOTAL_BYTES
 from session_migrate.model import AgentFormat, Event, EventKind, Provenance, Role, Session
 
-PINNED_HERMES_VERSION = "0.20.6"
-PINNED_HERMES_RELEASE_TAG = "v2026.8.27"
-PINNED_HERMES_SOURCE_COMMIT = "5fc308a70719a83cccdbba4c0e39c23f5a8239d5"
-PINNED_HERMES_SCHEMA_VERSION = 26
+PINNED_HERMES_VERSION = "0.22.2"
+PINNED_HERMES_RELEASE_TAG = "v2026.9.24"
+PINNED_HERMES_SOURCE_COMMIT = "d923a5eb487a17c0a68801bba9ef0f56c81040a8"
+PINNED_HERMES_SCHEMA_VERSION = 31
 HERMES_BUNDLE_SCHEMA = "session-migrate.hermes.v1"
 HERMES_STATE_FILENAME = "state.db"
 MAX_DATABASE_BYTES = 512 * 1024 * 1024
@@ -48,6 +49,10 @@ MAX_JSON_DEPTH = 96
 MAX_JSON_NODES = 1_000_000
 
 _NATIVE_ID = re.compile(r"(?P<date>\d{8})_(?P<time>\d{6})_(?P<suffix>[0-9a-f]{6,8})\Z")
+# 0.22.2 prints build provenance after the release ("· stable · local <sha>"), so the
+# version line is matched on its pinned prefix and every suffix is tolerated.
+_VERSION_LINE = re.compile(r"^Hermes Agent v(?P<version>[^\s(]+) \((?P<release>[^)]+)\)")
+_INSTALL_DIRECTORY_LINE = "install directory"
 _REQUIRED_SESSION_COLUMNS = frozenset(
     {
         "id",
@@ -673,9 +678,37 @@ def parse_session(path: Path, session_id: str | None = None) -> Session:
 parse = parse_session
 
 
-def verify_pinned_cli(
+def _cli_report(path: Path, values: Mapping[str, str], *arguments: str) -> str:
+    """Run the pinned launcher and return its stdout, refusing a failed invocation."""
+
+    safe_env = _subprocess_environment(values, None)
+    try:
+        completed = subprocess.run(
+            [str(path), *arguments],
+            env=safe_env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=30,
+            check=False,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SessionMigrateError("cannot query the Hermes version") from exc
+    if completed.returncode != 0:
+        raise SessionMigrateError("cannot query the Hermes version")
+    return completed.stdout
+
+
+def _verify_cli(
     executable: Path | None = None, *, environ: Mapping[str, str] | None = None
-) -> Path:
+) -> tuple[Path, str]:
+    """Resolve the Hermes launcher, prove it is the pinned build, return its report.
+
+    The full ``--version`` report is kept because 0.22.2 publishes the install
+    directory there, which is what locates the Python runtime behind a Windows
+    launcher shim (see :func:`_python_invocation`).
+    """
+
     values = dict(os.environ if environ is None else environ)
     candidate = str(executable) if executable else shutil.which("hermes", path=values.get("PATH"))
     if not candidate:
@@ -687,26 +720,25 @@ def verify_pinned_cli(
         raise SessionMigrateError("cannot inspect the Hermes executable") from exc
     if not stat.S_ISREG(info.st_mode):
         raise SessionMigrateError("Hermes executable is not a regular file")
-    safe_env = _subprocess_environment(values, None)
-    try:
-        completed = subprocess.run(
-            [str(path), "--version"],
-            env=safe_env,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=30,
-            check=False,
-            text=True,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise SessionMigrateError("cannot query the Hermes version") from exc
-    first = completed.stdout.splitlines()[0].strip() if completed.stdout.splitlines() else ""
+    report = _cli_report(path, values, "--version")
+    first = report.splitlines()[0].strip() if report.splitlines() else ""
+    observed = _VERSION_LINE.match(first)
     expected = f"Hermes Agent v{PINNED_HERMES_VERSION} ({PINNED_HERMES_RELEASE_TAG[1:]})"
-    if completed.returncode != 0 or first != expected:
+    if (
+        observed is None
+        or observed.group("version") != PINNED_HERMES_VERSION
+        or observed.group("release") != PINNED_HERMES_RELEASE_TAG[1:]
+    ):
         raise SessionMigrateError(
             f"Hermes version mismatch: expected {expected}, observed {first or '<unavailable>'}"
         )
-    return path
+    return path, report
+
+
+def verify_pinned_cli(
+    executable: Path | None = None, *, environ: Mapping[str, str] | None = None
+) -> Path:
+    return _verify_cli(executable, environ=environ)[0]
 
 
 def install_bundle(
