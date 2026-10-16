@@ -17,6 +17,10 @@ from session_migrate.model import AgentFormat, Event, EventKind, Provenance, Rol
 SESSION_ID = "20260830_123456_111111"
 FOLLOWUP = "HERMES_NATIVE_RESUME_FOLLOWUP_ZETA"
 REPLY = "HERMES_NATIVE_RESUME_REPLY_OMEGA"
+# Non-ASCII text travels through the bundle as bytes; a locale-encoded pipe used to
+# replace it with U+FFFD, so every trajectory asserts it survives verbatim.
+TITLE = "Hermes native resume fixture — ação"
+ACCENTED = "ação concluída — sem perdas"
 
 
 class Provider(ThreadingHTTPServer):
@@ -95,14 +99,14 @@ def _source(tmp_path: Path) -> Session:
         started_at="2026-08-30T12:34:56Z",
         cli_version="2.1.209",
         model="fixture-model",
-        title="Hermes native resume fixture",
+        title=TITLE,
         events=(
             Event(
                 EventKind.MESSAGE,
                 Provenance(0, "user"),
                 role=Role.USER,
                 timestamp="2026-08-30T12:34:56Z",
-                text="HERMES_IMPORTED_USER_ALPHA",
+                text=f"HERMES_IMPORTED_USER_ALPHA {ACCENTED}",
             ),
             Event(
                 EventKind.TOOL_CALL,
@@ -159,6 +163,27 @@ def _environment(home: Path, source: Path) -> dict[str, str]:
     for key in ("LANG", "LC_ALL", "LC_CTYPE", "TMPDIR"):
         if os.environ.get(key):
             environment[key] = os.environ[key]
+    # Windows needs its own essentials to load a child process at all, and the
+    # CLI resolves its home through USERPROFILE rather than HOME.
+    for key in (
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "SYSTEMROOT",
+        "SYSTEMDRIVE",
+        "WINDIR",
+        "PATHEXT",
+        "COMSPEC",
+        "TEMP",
+        "TMP",
+        "NUMBER_OF_PROCESSORS",
+    ):
+        if os.environ.get(key):
+            environment[key] = os.environ[key]
+    if not environment.get("USERPROFILE"):
+        environment["USERPROFILE"] = str(home)
     return environment
 
 
@@ -234,7 +259,7 @@ def test_hermes_0206_import_resume_replay_append_and_compaction(tmp_path: Path) 
         )
         assert installed.path == home / "state.db"
         before = hermes.parse_session(installed.path, SESSION_ID)
-        assert before.title == "Hermes native resume fixture"
+        assert before.title == TITLE
         assert before.cwd == work
         assert before.event_counts() == {
             "compaction": 1,
@@ -318,6 +343,7 @@ def test_hermes_0206_import_resume_replay_append_and_compaction(tmp_path: Path) 
         request_text = json.dumps(provider.requests[-1], ensure_ascii=False)
         for marker in (
             "HERMES_IMPORTED_USER_ALPHA",
+            ACCENTED,
             "call_hermes_native",
             "HERMES_IMPORTED_TOOL_GAMMA",
             "HERMES_IMPORTED_SUMMARY_DELTA",

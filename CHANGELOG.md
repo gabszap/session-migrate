@@ -6,6 +6,11 @@ here. Native format compatibility is documented separately in
 
 ## Unreleased
 
+- Move the Hermes import bundle across the process boundary as UTF-8 bytes
+  (`sys.stdin.buffer`, explicit stdout/stderr decoding, `-X utf8` child) instead
+  of locale-encoded text. On a Windows console whose code page is not UTF-8 the
+  old path replaced every non-ASCII character in the imported conversation —
+  title and message bodies — with `U+FFFD`.
 - Install a Hermes session untitled instead of refusing the migration when the
   target store already holds that title: Hermes enforces a partial unique index
   over non-null titles, and its own importer treats the field as cosmetic. The
