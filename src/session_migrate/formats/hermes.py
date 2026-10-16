@@ -20,6 +20,7 @@ import shutil
 import sqlite3
 import stat
 import subprocess
+import sys
 import tempfile
 from collections import Counter
 from collections.abc import Iterator, Mapping
@@ -233,20 +234,47 @@ def native_session_id(portable_id: str, timestamp: str) -> str:
     return normalized_session_id(moment.strftime("%Y%m%d_%H%M%S_") + suffix[:6])
 
 
-def hermes_home(home: Path | None = None, *, environ: Mapping[str, str] | None = None) -> Path:
-    """Resolve Hermes's native home without creating it."""
+def hermes_home(
+    home: Path | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+    platform: str | None = None,
+) -> Path:
+    """Resolve Hermes's native home without creating it.
+
+    Mirrors the CLI's own platform default: ``%LOCALAPPDATA%\\hermes`` on
+    Windows (``~/AppData/Local/hermes`` when that variable is unset) and
+    ``~/.hermes`` elsewhere.  ``HERMES_HOME`` wins when it is set.  Resolving a
+    bare ``~/.hermes`` on Windows named a directory the CLI never writes to, so
+    an install landed outside the real store unless the caller exported
+    ``HERMES_HOME`` by hand.
+    """
 
     values = os.environ if environ is None else environ
-    configured = values.get("HERMES_HOME", "").strip()
-    return Path(configured).expanduser() if configured else (home or Path.home()) / ".hermes"
+    configured = str(values.get("HERMES_HOME", "")).strip()
+    if configured:
+        return Path(configured).expanduser()
+    user_home = home or Path.home()
+    if (sys.platform if platform is None else platform) == "win32":
+        local_app_data = str(values.get("LOCALAPPDATA", "")).strip()
+        base = Path(local_app_data).expanduser() if local_app_data else user_home / "AppData" / "Local"
+        return base / "hermes"
+    return user_home / ".hermes"
 
 
 def state_database_path(
-    root: Path | None = None, *, environ: Mapping[str, str] | None = None
+    root: Path | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+    platform: str | None = None,
 ) -> Path:
     """Resolve ``state.db`` from an explicit Hermes root or the native default."""
 
-    selected = Path(root).expanduser() if root is not None else hermes_home(environ=environ)
+    selected = (
+        Path(root).expanduser()
+        if root is not None
+        else hermes_home(environ=environ, platform=platform)
+    )
     return selected / HERMES_STATE_FILENAME
 
 
