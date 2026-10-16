@@ -277,14 +277,15 @@ def test_claude_compaction_logical_back_edge_terminates_cycle(tmp_path: Path) ->
 
 
 def test_claude_compaction_summary_inside_the_chain_terminates_the_loop(tmp_path: Path) -> None:
-    """Claude Code 2.1.300 parks the compact summary below the boundary, not under it.
+    """The compact summary can sit several hops below the boundary.
 
-    Reproduced from a real 73 MB session with two compactions: the boundary is
-    followed by attachment records, then the summary, then the preserved tail,
-    and ``preservedMessages`` also names ids from the summarized branch that are
-    no longer on the active path.  Demanding that the summary be the boundary's
-    direct child, and that every declared id be walked, refused the session as an
-    "ancestry cycle" even though its active graph is intact.
+    Reproduced from a real 73 MB session with two compactions, one of them a
+    direct child of its boundary and the other four hops below it: attachments
+    the CLI interleaves (environment snapshots) sit between the two.  The
+    declaration is unchanged, and ``preservedMessages`` also names ids from the
+    summarized branch that are no longer on the active path.  Demanding that the
+    summary be the boundary's direct child, and that every declared id be walked,
+    refused the session as an "ancestry cycle" even though its graph is intact.
     """
 
     cwd = str(tmp_path)
