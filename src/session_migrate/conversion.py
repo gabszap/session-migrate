@@ -1291,8 +1291,7 @@ def _resolve_hermes_title_conflict(
                 "code": "target_title_omitted",
                 "title": title,
                 "message": (
-                    "target store already holds this title; the session was installed "
-                    "without one"
+                    "target store already holds this title; the session was installed without one"
                 ),
             },
         ),

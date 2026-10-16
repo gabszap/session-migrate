@@ -316,9 +316,12 @@ def test_hermes_root_and_state_database_resolution(tmp_path: Path) -> None:
     # The platform default follows the CLI: %LOCALAPPDATA%\hermes on Windows,
     # ~/.hermes elsewhere (see test_hermes_home_matches_the_native_cli_platform_default).
     assert hermes.hermes_home(user_home, environ={}, platform="linux") == user_home / ".hermes"
-    assert hermes.hermes_home(
-        user_home, environ={"LOCALAPPDATA": str(tmp_path / "local-app-data")}, platform="win32"
-    ) == tmp_path / "local-app-data" / "hermes"
+    assert (
+        hermes.hermes_home(
+            user_home, environ={"LOCALAPPDATA": str(tmp_path / "local-app-data")}, platform="win32"
+        )
+        == tmp_path / "local-app-data" / "hermes"
+    )
 
 
 def test_hermes_bundle_round_trip_tools_media_compaction_and_private_omissions(
@@ -671,26 +674,32 @@ def test_hermes_install_helper_moves_the_bundle_as_utf8_bytes(
 def test_hermes_home_matches_the_native_cli_platform_default(tmp_path: Path) -> None:
     """A bare ``~/.hermes`` is wrong on Windows, where the CLI writes %LOCALAPPDATA%."""
 
-    assert hermes.hermes_home(
-        home=tmp_path, environ={}, platform="linux"
-    ) == tmp_path / ".hermes"
-    assert hermes.hermes_home(
-        home=tmp_path, environ={"LOCALAPPDATA": r"C:\fixture\AppData\Local"}, platform="win32"
-    ) == Path(r"C:\fixture\AppData\Local") / "hermes"
+    assert hermes.hermes_home(home=tmp_path, environ={}, platform="linux") == tmp_path / ".hermes"
+    assert (
+        hermes.hermes_home(
+            home=tmp_path, environ={"LOCALAPPDATA": r"C:\fixture\AppData\Local"}, platform="win32"
+        )
+        == Path(r"C:\fixture\AppData\Local") / "hermes"
+    )
     assert hermes.hermes_home(home=tmp_path, environ={}, platform="win32") == (
         tmp_path / "AppData" / "Local" / "hermes"
     )
     # HERMES_HOME wins everywhere, and a blank value counts as unset.
     custom = tmp_path / "custom-home"
-    assert hermes.hermes_home(
-        home=tmp_path, environ={"HERMES_HOME": str(custom)}, platform="win32"
-    ) == custom
-    assert hermes.hermes_home(
-        home=tmp_path, environ={"HERMES_HOME": "   "}, platform="win32"
-    ) == tmp_path / "AppData" / "Local" / "hermes"
-    assert hermes.state_database_path(
-        environ={"LOCALAPPDATA": r"C:\fixture\AppData\Local"}, platform="win32"
-    ) == Path(r"C:\fixture\AppData\Local") / "hermes" / "state.db"
+    assert (
+        hermes.hermes_home(home=tmp_path, environ={"HERMES_HOME": str(custom)}, platform="win32")
+        == custom
+    )
+    assert (
+        hermes.hermes_home(home=tmp_path, environ={"HERMES_HOME": "   "}, platform="win32")
+        == tmp_path / "AppData" / "Local" / "hermes"
+    )
+    assert (
+        hermes.state_database_path(
+            environ={"LOCALAPPDATA": r"C:\fixture\AppData\Local"}, platform="win32"
+        )
+        == Path(r"C:\fixture\AppData\Local") / "hermes" / "state.db"
+    )
     assert hermes.state_database_path(root=tmp_path / "explicit", platform="win32") == (
         tmp_path / "explicit" / "state.db"
     )
@@ -708,17 +717,27 @@ def test_hermes_import_budget_covers_a_bundle_the_store_caps_by_default() -> Non
     assert hermes.import_budget_bytes(0) == hermes.PINNED_HERMES_IMPORT_SESSION_BYTES
     assert hermes.import_budget_bytes(1024) == hermes.PINNED_HERMES_IMPORT_SESSION_BYTES
     assert hermes.import_budget_bytes(6 * 1024 * 1024) == 6 * 1024 * 1024
-    assert hermes.import_budget_bytes(900 * 1024 * 1024) == hermes.PINNED_HERMES_IMPORT_CEILING_BYTES
+    assert (
+        hermes.import_budget_bytes(900 * 1024 * 1024) == hermes.PINNED_HERMES_IMPORT_CEILING_BYTES
+    )
 
     # `timings` is derived on export and never counts against the content budget.
-    session = {"id": "20260830_123456_abcdef", "messages": [{"content": "á"}], "timings": [{"x": "y" * 4096}]}
+    session = {
+        "id": "20260830_123456_abcdef",
+        "messages": [{"content": "á"}],
+        "timings": [{"x": "y" * 4096}],
+    }
     sized = hermes.measured_session_bytes(session)
-    assert sized == len(json.dumps(
-        {"id": "20260830_123456_abcdef", "messages": [{"content": "á"}]},
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8"))
-    assert sized < len(json.dumps(session, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    assert sized == len(
+        json.dumps(
+            {"id": "20260830_123456_abcdef", "messages": [{"content": "á"}]},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    assert sized < len(
+        json.dumps(session, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    )
 
 
 def test_hermes_rejects_symlink_and_unsupported_schema(tmp_path: Path) -> None:

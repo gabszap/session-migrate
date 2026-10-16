@@ -266,7 +266,9 @@ def hermes_home(
     user_home = home or Path.home()
     if (sys.platform if platform is None else platform) == "win32":
         local_app_data = str(values.get("LOCALAPPDATA", "")).strip()
-        base = Path(local_app_data).expanduser() if local_app_data else user_home / "AppData" / "Local"
+        base = (
+            Path(local_app_data).expanduser() if local_app_data else user_home / "AppData" / "Local"
+        )
         return base / "hermes"
     return user_home / ".hermes"
 
@@ -807,7 +809,9 @@ def measured_session_bytes(session: Mapping[str, Any]) -> int:
 def import_budget_bytes(measured: int) -> int:
     """Per-session import budget to request for a bundle of ``measured`` bytes."""
 
-    return max(PINNED_HERMES_IMPORT_SESSION_BYTES, min(measured, PINNED_HERMES_IMPORT_CEILING_BYTES))
+    return max(
+        PINNED_HERMES_IMPORT_SESSION_BYTES, min(measured, PINNED_HERMES_IMPORT_CEILING_BYTES)
+    )
 
 
 def install_bundle(
@@ -1434,9 +1438,7 @@ def _install_directory(report: str) -> Path | None:
     return None
 
 
-def _runtime_command(
-    executable: Path, values: Mapping[str, str]
-) -> list[str] | None:
+def _runtime_command(executable: Path, values: Mapping[str, str]) -> list[str] | None:
     """Ask the launcher for the exact command that runs Hermes in this install.
 
     ``hermes --print-runtime-command`` prints a JSON argv whose first element is
