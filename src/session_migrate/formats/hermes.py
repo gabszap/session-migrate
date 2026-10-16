@@ -23,7 +23,7 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -40,6 +40,14 @@ PINNED_HERMES_VERSION = "0.22.2"
 PINNED_HERMES_RELEASE_TAG = "v2026.9.24"
 PINNED_HERMES_SOURCE_COMMIT = "d923a5eb487a17c0a68801bba9ef0f56c81040a8"
 PINNED_HERMES_SCHEMA_VERSION = 31
+# ``SessionDB`` caps one session at 5 MiB on import while Hermes' own web import
+# accepts 25 MiB (``hermes_cli/web_routers/sessions.py``).  A portable session
+# carrying a pasted screenshot (inline base64 image) trips the lower bound: the
+# bundle is valid and the store accepts stores of that size everywhere else, so
+# the installer raises the per-session budget to what the bundle needs — never
+# past the vendor's own ceiling — and reports it as a manifest warning.
+PINNED_HERMES_IMPORT_SESSION_BYTES = 5 * 1024 * 1024
+PINNED_HERMES_IMPORT_CEILING_BYTES = 25 * 1024 * 1024
 HERMES_BUNDLE_SCHEMA = "session-migrate.hermes.v1"
 HERMES_STATE_FILENAME = "state.db"
 MAX_DATABASE_BYTES = 512 * 1024 * 1024
@@ -192,6 +200,7 @@ class ParsedHermesBundle:
     started_at: str
     model: str | None
     messages: tuple[dict[str, Any], ...]
+    session: Mapping[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -564,6 +573,7 @@ def validate_native_bytes(data: bytes, session_id: str) -> ParsedHermesBundle:
         started_at=_timestamp(started_epoch),
         model=model,
         messages=tuple(dict(message) for message in messages),
+        session=value["session"],
     )
 
 
@@ -771,6 +781,23 @@ def verify_pinned_cli(
     return _verify_cli(executable, environ=environ)[0]
 
 
+def measured_session_bytes(session: Mapping[str, Any]) -> int:
+    """Size one bundle session exactly the way the store sizes it.
+
+    ``timings`` is derived from the messages and rebuilt on export, so it does
+    not eat into the budget of the content it describes.
+    """
+
+    measured = {key: value for key, value in session.items() if key != "timings"}
+    return len(json.dumps(measured, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def import_budget_bytes(measured: int) -> int:
+    """Per-session import budget to request for a bundle of ``measured`` bytes."""
+
+    return max(PINNED_HERMES_IMPORT_SESSION_BYTES, min(measured, PINNED_HERMES_IMPORT_CEILING_BYTES))
+
+
 def install_bundle(
     data: bytes,
     *,
@@ -802,13 +829,22 @@ def install_bundle(
 
     helper = (
         "import json,sys; from pathlib import Path; from hermes_state import SessionDB; "
-        "value=json.loads(sys.stdin.buffer.read()); db=SessionDB(db_path=Path(sys.argv[1])); "
+        "value=json.loads(sys.stdin.buffer.read()); "
+        "SessionDB._IMPORT_MAX_SESSION_BYTES=max("
+        "SessionDB._IMPORT_MAX_SESSION_BYTES,int(sys.argv[2])); "
+        "db=SessionDB(db_path=Path(sys.argv[1])); "
         "result=db.import_sessions([value['session']]); db.close(); "
         "print(json.dumps(result,separators=(',',':')))"
     )
     try:
         code, stdout, stderr = _run_helper(
-            prefix, prelude, helper, database=database, payload=data, environment=environment
+            prefix,
+            prelude,
+            helper,
+            database=database,
+            payload=data,
+            environment=environment,
+            extra_arguments=[str(import_budget_bytes(measured_session_bytes(parsed.session)))],
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise SessionMigrateError("Hermes session import failed") from exc
@@ -864,6 +900,7 @@ def _run_helper(
     database: Path,
     payload: bytes | None,
     environment: Mapping[str, str],
+    extra_arguments: Sequence[str] = (),
 ) -> tuple[int, str, str]:
     """Run one helper inside the Hermes runtime, moving any payload as bytes.
 
@@ -881,7 +918,7 @@ def _run_helper(
     else:
         arguments["input"] = payload
     completed = subprocess.run(
-        [*prefix, prelude + source, str(database)],
+        [*prefix, prelude + source, str(database), *extra_arguments],
         env=dict(environment),
         capture_output=True,
         timeout=120,
