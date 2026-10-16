@@ -1175,8 +1175,8 @@ class Catalog:
                 unchanged = bool(
                     previous
                     and previous["status"] != "missing"
-                    and int(previous["device"]) == before.device
-                    and int(previous["inode"]) == before.inode
+                    and int(previous["device"]) == _sqlite_stat_int(before.device)
+                    and int(previous["inode"]) == _sqlite_stat_int(before.inode)
                     and int(previous["bytes"]) == before.size
                     and int(previous["modified_ns"]) == before.modified_ns
                     and previous["source_fingerprint"] == getattr(before, "fingerprint", None)
@@ -1544,8 +1544,8 @@ class Catalog:
                 scan.status,
                 scan.reason,
                 scan.records,
-                snapshot.device,
-                snapshot.inode,
+                _sqlite_stat_int(snapshot.device),
+                _sqlite_stat_int(snapshot.inode),
                 snapshot.size,
                 snapshot.modified_ns,
                 getattr(snapshot, "fingerprint", None),
@@ -1625,8 +1625,8 @@ class Catalog:
                 scan.status,
                 scan.reason,
                 scan.records,
-                snapshot.device,
-                snapshot.inode,
+                _sqlite_stat_int(snapshot.device),
+                _sqlite_stat_int(snapshot.inode),
                 snapshot.size,
                 snapshot.modified_ns,
                 snapshot.fingerprint,
@@ -3085,6 +3085,21 @@ def _iso_from_milliseconds(value: Any) -> str | None:
 
 def _is_non_negative_sqlite_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _sqlite_stat_int(value: int) -> int:
+    """Fold one ``os.stat`` identity field into SQLite's signed 64-bit range.
+
+    Windows reports ``st_dev`` as an unsigned 64-bit volume serial
+    (``15332589137577146414`` for an NTFS system volume), which SQLite cannot
+    bind at all: the INSERT raises ``OverflowError`` and the entire root scan
+    fails closed. The same 64 bits read signed identify the volume just as
+    uniquely, and both the stored value and every comparison go through here,
+    so refresh reuse keeps matching.
+    """
+
+    folded = int(value) & ((1 << 64) - 1)
+    return folded - (1 << 64) if folded > (1 << 63) - 1 else folded
 
 
 def _copilot_native_metadata(root: Path) -> _NativeMetadata:
