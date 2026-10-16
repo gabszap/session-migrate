@@ -1,6 +1,6 @@
 # Session migration specification
 
-This is the user-facing contract for `session-migrate` 0.12.0.
+This is the user-facing contract for `session-migrate` 0.12.1.
 
 ## Scope
 

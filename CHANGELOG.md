@@ -4,6 +4,24 @@ All notable changes to `session-migrate` are recorded
 here. Native format compatibility is documented separately in
 [`docs/format-compatibility.md`](docs/format-compatibility.md).
 
+## 0.12.1 - 2026-10-16
+
+- Accept the compaction loop Claude Code records when the compact summary is not
+  the boundary's direct child. The declaration is unchanged, but how many
+  attachment records the CLI interleaves varies, so the summary can sit three or
+  four parent hops below its boundary, and `preservedMessages` also names ids
+  from the summarized branch that are no longer on the active path. A readable
+  73 MB transcript with two compactions was refused as `Claude active graph
+  contains an ancestry cycle`; the loop is now validated as declared (the tail
+  walks up to the summary, the summary up to the boundary, every hop already on
+  the walked path) and a declaration that does not close still fails.
+- Import a bundle the target store caps at 5 MiB per session by raising the
+  budget to what the bundle needs — never past the 25 MiB that store's own web
+  import accepts — and reporting `target_import_budget_raised` in the manifest.
+  A session carrying pasted screenshots (inline base64 images) produced a
+  6.88 MB bundle and was refused with `session exceeds the import size limit`,
+  although the store keeps that content.
+
 ## 0.12.0 - 2026-10-16
 
 - Resolve the Hermes home the way the CLI does: `HERMES_HOME` when set,
