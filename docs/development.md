@@ -39,7 +39,7 @@ pytest and Ruff are development dependencies locked by `uv.lock`.
 | `src/session_migrate/formats/grok.py` | Grok 1.0.5 ACP-update adapter |
 | `src/session_migrate/formats/kilo.py` | Kilo Code 7.5.0 official-bundle adapter |
 | `src/session_migrate/formats/openhands.py` | OpenHands 1.16.0 SDK-event adapter |
-| `src/session_migrate/formats/hermes.py` | Hermes Agent 0.20.6 shared-state adapter |
+| `src/session_migrate/formats/hermes.py` | Hermes Agent 0.22.2 shared-state adapter |
 | `src/session_migrate/formats/mastracode.py` | MastraCode 0.37.1 LibSQL adapter |
 | `src/session_migrate/formats/devin.py` | Devin CLI 3000.6.7 active-forest adapter |
 | `src/session_migrate/formats/common.py` | Shared timestamps, text, and image validation |

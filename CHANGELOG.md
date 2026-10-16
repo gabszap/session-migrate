@@ -6,6 +6,17 @@ here. Native format compatibility is documented separately in
 
 ## Unreleased
 
+- Promote the Hermes Agent adapter to 0.22.2 (tag `v2026.9.24`) and SQLite
+  schema 31, keeping `SessionDB.import_sessions` as the native write boundary.
+- Resolve the 0.22.2 runtime through `hermes --print-runtime-command` and
+  reproduce the launcher's `hermes_bootstrap` prelude, so the installer works
+  with a store Python that ships without third-party packages. The install root
+  comes from `hermes --version` (or the launcher's own bootstrap), and the
+  launcher shebang remains the fallback for builds predating the flag.
+- Fix Hermes installation on Windows: keep the Windows essentials in the
+  sanitized child environment, initialize a missing `state.db` through the
+  native `SessionDB` constructor, and close the manifest identity guard before a
+  rollback unlinks it (`WinError 32`).
 - Add first-class support for Antigravity Desktop (macOS/Electron) 2.18.1
   with bidirectional conversion, SQLite schema adaptation, Hub Summaries
   Protobuf cache synchronization (`agyhub_summaries_proto.pb`), project-scoped

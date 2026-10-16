@@ -9,16 +9,18 @@ so the adapter fails closed on any other Hermes or schema version.
 | Item | Validated value |
 | --- | --- |
 | Project | [`NousResearch/hermes-agent`](https://github.com/NousResearch/hermes-agent) |
-| Release tag | `v2026.8.27` |
-| Python package | `hermes-agent==0.20.6` |
-| Source commit | `5fc308a70719a83cccdbba4c0e39c23f5a8239d5` |
-| Source-archive SHA-256 | `0ca18fcf97a69bad808ce4a0807694b25237afc61f7a13efab4f0aa26092a171` |
-| Native SQLite schema | `26` |
-| Observed CLI version | `Hermes Agent v0.20.6 (2026.8.27)` |
+| Release tag | `v2026.9.24` (also published as `v0.22.2`) |
+| Python package | `hermes-agent==0.22.2` |
+| Source commit | `d923a5eb487a17c0a68801bba9ef0f56c81040a8` |
+| Native SQLite schema | `31` |
+| Observed CLI version | `Hermes Agent v0.22.2 (2026.9.24) · stable · local d923a5eb487a` |
 
-The source archive hash is the SHA-256 of `git archive` at the pinned commit.
-The editable development launcher is deliberately not used as an artifact pin:
-its shebang contains the temporary installation path.
+The adapter now pins the same release the published launcher reports, instead of
+carrying a source-archive hash: a 0.22.2 git install reports its own build
+provenance on the version line, so the release identity is read from the
+launcher itself (`Hermes Agent v<version> (<release>)`, with any trailing
+`· stable · local <sha>` suffix tolerated) rather than from an artifact hash
+that a rebuild would invalidate.
 
 ## Native store and discovery
 
@@ -28,7 +30,8 @@ Hermes stores all CLI sessions in one SQLite database:
 $HERMES_HOME/state.db
 ```
 
-`HERMES_HOME` defaults to `~/.hermes`. Unlike file-per-session harnesses, a
+`HERMES_HOME` defaults to `~/.hermes`, or to `%LOCALAPPDATA%\hermes` on Windows.
+Unlike file-per-session harnesses, a
 Hermes catalog entry is virtual: its identity is the pair `state.db` plus the
 native session ID. Native IDs have the form:
 
@@ -43,7 +46,7 @@ stored message count. `cli_version` is `None` because Hermes does not persist a
 per-session CLI version; database schema validation supplies the compatibility
 gate instead.
 
-The schema-26 tables used by the adapter are:
+The schema-31 tables used by the adapter are:
 
 | Table | Fields used |
 | --- | --- |
@@ -51,10 +54,14 @@ The schema-26 tables used by the adapter are:
 | `sessions` | identity, title, CWD, model/provider, start/end/activity time, message count |
 | `messages` | role/content, tool linkage, timestamp, private reasoning markers, active/compacted state |
 
+Schema 31 keeps every column the adapter requires from schema 26, so the
+projection and the required-column gates are unchanged; only the pinned version
+value moved.
+
 Discovery and parsing first take a bounded SQLite backup. This includes
 committed WAL frames and gives the catalog a stable SHA-256 fingerprint. A
 symlink, non-regular file, oversized database, integrity failure, missing
-columns, or schema other than 26 is rejected.
+columns, or schema other than 31 is rejected.
 
 ## Source projection
 
@@ -102,15 +109,57 @@ install_bundle(
 ) -> InstalledHermesSession
 ```
 
-The installer verifies the exact CLI version, initializes a missing
-`state.db` through the CLI, refuses an existing session ID, invokes the native
-importer, and reparses the installed row before returning. Target directories
-are private and symlink traversal is rejected.
+The installer verifies the exact CLI version, creates a missing `state.db`
+through the native `SessionDB` initializer, refuses an existing session ID,
+invokes the native importer, and reparses the installed row before returning.
+Target directories are private and symlink traversal is rejected.
 
 Hermes's user-facing `hermes sessions import` command currently accepts Claude
-and Codex sources, not Hermes's own export. `SessionDB.import_sessions` is the
-native export/import transaction used internally and is therefore the pinned
+and Codex sources, not Hermes's own export. `SessionDB.import_sessions` remains
+the native export/import transaction in 0.22.2 and is therefore still the pinned
 installation boundary here.
+
+## The native runtime behind the launcher
+
+0.22.2 publishes its own launch command, and the adapter uses it instead of
+guessing a Python from the launcher's file head:
+
+```bash
+hermes --print-runtime-command   # JSON argv: [interpreter, -I, -c, bootstrap, ...]
+hermes --version                 # also prints "Install directory: <root>"
+```
+
+That interpreter is *store Python*: it deliberately ships with no third-party
+packages. The published launcher reaches the dependency generation by importing
+`hermes_bootstrap` after putting the install root on `sys.path`, so the helper
+the installer runs reproduces exactly that prelude (clear `PYTHONHOME`,
+`PYTHONPATH` and `VIRTUAL_ENV`; insert the install root; import
+`hermes_bootstrap`). Without it, every `hermes_state` import fails on a missing
+`ruamel`, not on anything session-related. Builds predating
+`--print-runtime-command` keep the older behaviour: the adapter derives the
+interpreter from the launcher's `#!` line.
+
+Two platform facts are handled explicitly:
+
+- **Windows launchers are compiled zipapps.** `hermes.exe` is a PE stub with the
+  launcher's `__main__.py` appended, so there is no `#!` line the old code could
+  read; `--print-runtime-command` is the only portable source. The install
+  directory is recovered from `Install directory:`, or from the launcher's own
+  `sys.path.insert(0, ...)` bootstrap when that line is absent.
+- **A sanitized child environment must keep the Windows essentials.** The CLI
+  refuses to start when it cannot resolve a home directory, and a Windows child
+  needs `SYSTEMROOT`, `PATHEXT` and `COMSPEC` to load at all. The allowlist
+  therefore carries `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`,
+  `LOCALAPPDATA`, `PROGRAMDATA`, `SYSTEMROOT`, `SYSTEMDRIVE`, `WINDIR`,
+  `PATHEXT`, `COMSPEC`, `TEMP`, `TMP` and `NUMBER_OF_PROCESSORS` alongside the
+  POSIX variables; `HOME` is mirrored into `USERPROFILE` when the caller
+  redirects the home through `HOME` only.
+
+Installation summary: `hermes sessions list` no longer creates `state.db` on a
+read of an absent store, so initialization moved to the native `SessionDB`
+constructor; and the identity-guard descriptor that reserves the manifest is
+closed before a rollback unlinks it, because Windows refuses to delete a file
+that still has an open handle (`WinError 32`).
 
 Resume uses Hermes's native command:
 
@@ -139,6 +188,31 @@ Research and validation ran in a unique mode-`0700` temporary root. The pinned
 source was installed into its own virtual environment; no user Hermes home or
 credential store was read or copied.
 
+The 0.20.6 trajectories below remain the historical record of the original
+adapter research. The 0.22.2 promotion was re-validated on a live Windows
+install:
+
+1. Read side, against the real store, read-only: a 31 MB `state.db` at schema
+   `31` was snapshotted (bounded SQLite backup), all required session and
+   message columns were present, and inventory returned every session row.
+2. Write side, in an isolated scratch home: a generated bundle installed through
+   `SessionDB.import_sessions`, was reparsed (title, CWD, both message events),
+   appeared in `list_sessions` with the right record count, and a second install
+   of the same native ID was refused with the session store byte-identical
+   afterwards.
+3. End-to-end route: a real Claude Code session (23 records) transferred with
+   `smigrate transfer --from claude --to hermes`. The native CLI listed the
+   result — `message_count` 22, `tool_call_count` 9, nine linked `tool` rows
+   carrying `tool_call_id` and `tool_name`, the source title and CWD preserved,
+   `source=session-migrate` — which is the fidelity the text-only native
+   importer does not provide: `hermes sessions import` writes `[ran tool: Bash]`
+   markers into the assistant body and leaves `tool_call_count=0`.
+
+Not verified in this round: a live `hermes chat --resume` against a provider,
+native compaction after import, and WAL-snapshot behaviour while another writer
+is appending. Those remain covered by the opt-in native test rather than by
+this promotion.
+
 Three native trajectories were inspected:
 
 1. A real Hermes CLI session containing a user turn, assistant function call,
@@ -165,7 +239,7 @@ the new summary and accounted for archived rows.
 One observed native nuance is documented rather than papered over: the first
 CLI-created row stored a title but left `cwd` and `model` null despite launch
 options, while imported sessions retained an explicit CWD. Both are valid
-schema-26 states, so inventory and parsing treat native CWD/model as optional.
+schema states, so inventory and parsing treat native CWD/model as optional.
 
 ## Test contract
 
@@ -184,8 +258,8 @@ and its installed CLI. It still uses no provider credential and binds its fake
 provider only to loopback:
 
 ```bash
-SESSION_MIGRATE_HERMES_SOURCE=/path/to/hermes-agent-v2026.8.27 \
-SESSION_MIGRATE_HERMES_BIN=/path/to/hermes-agent-v2026.8.27/.venv/bin/hermes \
+SESSION_MIGRATE_HERMES_SOURCE=/path/to/hermes-agent-v2026.9.24 \
+SESSION_MIGRATE_HERMES_BIN=/path/to/hermes-agent-v2026.9.24/.venv/bin/hermes \
   uv run pytest -q tests/test_hermes_native.py -vv
 ```
 

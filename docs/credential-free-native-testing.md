@@ -49,7 +49,7 @@ No production credential is read, translated, or written by this workflow.
 | Cursor `2026.03.20-44cb435` | Shipped backend loads blobs and the real TUI renders imported text; no offline model append |
 | Devin 3000.6.7 | Native list/resume selection and ACP `session/load`; stops at vendor authentication |
 | Grok 1.0.5 | OpenAI-compatible override; native creation, reload, TUI replay, and append |
-| Hermes 0.20.6 | OpenAI-compatible override; replay, append, and compaction |
+| Hermes 0.22.2 | OpenAI-compatible override; replay, append, and compaction |
 | Kilo 7.5.0 | Official import/export plus OpenAI-compatible replay and append |
 | Kimi 0.38.0 | OpenAI-compatible override; imported history replays and the reply persists |
 | MastraCode 0.37.1 | OpenAI-compatible override; replay and append |
