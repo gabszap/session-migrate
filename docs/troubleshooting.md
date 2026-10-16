@@ -248,7 +248,7 @@ smigrate catalog refresh --mastracode-root /path/to/mastra.db
 smigrate catalog refresh --devin-root /path/to/devin-home
 ```
 
-Hermes `0.20.6`, MastraCode `0.37.1`, and Devin `3000.6.7` are strict native
+Hermes `0.22.2`, MastraCode `0.37.1`, and Devin `3000.6.7` are strict native
 pins. Use `--source-cli` or `--target-cli` when the exact binary is not on
 `PATH`; a version override cannot bypass a schema or binary mismatch. Hermes
 installation uses the pinned official Python importer. MastraCode and Devin

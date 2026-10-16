@@ -31,7 +31,7 @@ to separately installed host binaries:
 | Grok source and target | `1.0.5` |
 | Kilo Code source and target | `7.5.0` |
 | OpenHands source and target | `1.16.0` (SDK `1.21.0`) |
-| Hermes Agent source and target | `0.20.6` (tag `v2026.8.27`) |
+| Hermes Agent source and target | `0.22.2` (tag `v2026.9.24`, SQLite schema `31`) |
 | MastraCode source and target | `0.37.1` |
 | Devin CLI source and target | `3000.6.7` (`260a97c8`) |
 
