@@ -30,7 +30,10 @@ Hermes stores all CLI sessions in one SQLite database:
 $HERMES_HOME/state.db
 ```
 
-`HERMES_HOME` defaults to `~/.hermes`, or to `%LOCALAPPDATA%\hermes` on Windows.
+`HERMES_HOME` wins when it is set; otherwise the home is the CLI's own platform
+default — `%LOCALAPPDATA%\hermes` on Windows (`~/AppData/Local/hermes` when that
+variable is unset) and `~/.hermes` elsewhere. Resolving a bare `~/.hermes` on
+Windows used to name a directory the CLI never writes to.
 Unlike file-per-session harnesses, a
 Hermes catalog entry is virtual: its identity is the pair `state.db` plus the
 native session ID. Native IDs have the form:

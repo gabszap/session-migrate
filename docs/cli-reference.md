@@ -175,7 +175,7 @@ installation still requires the exact pinned version.
 | Grok | `$GROK_HOME`, otherwise `~/.grok` |
 | Kilo Code | official CLI under its normal XDG data root |
 | OpenHands | `$OPENHANDS_CONVERSATIONS_DIR`, otherwise `~/.openhands/conversations` |
-| Hermes Agent | `$HERMES_HOME`, otherwise `~/.hermes` |
+| Hermes Agent | `$HERMES_HOME`, otherwise the CLI's platform default: `%LOCALAPPDATA%\hermes` on Windows, `~/.hermes` elsewhere |
 | MastraCode | `$MASTRA_DB_PATH`; otherwise `$MASTRA_APP_DATA_DIR/mastra.db` or the platform data directory |
 | Devin CLI | `$XDG_DATA_HOME/devin/cli`, otherwise `~/.local/share/devin/cli` on Linux |
 

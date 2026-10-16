@@ -6,6 +6,11 @@ here. Native format compatibility is documented separately in
 
 ## Unreleased
 
+- Resolve the Hermes home the way the CLI does: `HERMES_HOME` when set,
+  otherwise `%LOCALAPPDATA%\hermes` on Windows and `~/.hermes` elsewhere. A bare
+  `~/.hermes` on Windows named a directory the CLI never writes to, so
+  `--to hermes` (and catalog discovery) missed the real store unless the caller
+  exported `HERMES_HOME` by hand.
 - Move the Hermes import bundle across the process boundary as UTF-8 bytes
   (`sys.stdin.buffer`, explicit stdout/stderr decoding, `-X utf8` child) instead
   of locale-encoded text. On a Windows console whose code page is not UTF-8 the
