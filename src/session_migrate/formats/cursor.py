@@ -322,14 +322,26 @@ def snapshot_database_bytes(path: Path) -> bytes:
     with tempfile.TemporaryDirectory(prefix="session-migrate-cursor-snapshot-") as directory:
         target = Path(directory) / "snapshot.db"
         uri = f"file:{quote(str(source), safe='/')}?mode=ro"
+        origin = None
+        destination = None
         try:
-            with sqlite3.connect(uri, uri=True, timeout=5) as origin:
-                origin.execute("PRAGMA trusted_schema=OFF")
-                with sqlite3.connect(target) as destination:
-                    origin.backup(destination)
+            origin = sqlite3.connect(uri, uri=True, timeout=5)
+            origin.execute("PRAGMA trusted_schema=OFF")
+            destination = sqlite3.connect(target)
+            origin.backup(destination)
+            destination.commit()
+            origin.close()
+            origin = None
+            destination.close()
+            destination = None
             data = target.read_bytes()
         except (OSError, sqlite3.Error) as exc:
             raise SessionMigrateError("cannot make a consistent Cursor store snapshot") from exc
+        finally:
+            if origin is not None:
+                origin.close()
+            if destination is not None:
+                destination.close()
     if not data or len(data) > MAX_NATIVE_BYTES:
         raise SessionMigrateError("Cursor store snapshot violates the database size limit")
     return data
@@ -482,28 +494,35 @@ def install_database(
 def _build_database(metadata: Mapping[str, Any], blobs: Mapping[str, bytes]) -> bytes:
     with tempfile.TemporaryDirectory(prefix="session-migrate-cursor-build-") as directory:
         path = Path(directory) / "store.db"
+        db = None
         try:
-            with sqlite3.connect(path) as db:
-                db.execute("PRAGMA journal_mode=DELETE")
-                db.execute("PRAGMA synchronous=FULL")
-                db.execute("PRAGMA user_version=1")
-                db.executescript(
-                    """
-                    CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB);
-                    CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
-                    """
-                )
-                db.executemany(
-                    "INSERT INTO blobs(id,data) VALUES(?,?)",
-                    sorted((blob_id, value) for blob_id, value in blobs.items()),
-                )
-                metadata_bytes = json.dumps(
-                    dict(metadata), ensure_ascii=False, separators=(",", ":"), allow_nan=False
-                ).encode()
-                db.execute("INSERT INTO meta(key,value) VALUES('0',?)", (metadata_bytes.hex(),))
+            db = sqlite3.connect(path)
+            db.execute("PRAGMA journal_mode=DELETE")
+            db.execute("PRAGMA synchronous=FULL")
+            db.execute("PRAGMA user_version=1")
+            db.executescript(
+                """
+                CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB);
+                CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+                """
+            )
+            db.executemany(
+                "INSERT INTO blobs(id,data) VALUES(?,?)",
+                sorted((blob_id, value) for blob_id, value in blobs.items()),
+            )
+            metadata_bytes = json.dumps(
+                dict(metadata), ensure_ascii=False, separators=(",", ":"), allow_nan=False
+            ).encode()
+            db.execute("INSERT INTO meta(key,value) VALUES('0',?)", (metadata_bytes.hex(),))
+            db.commit()
+            db.close()
+            db = None
             data = path.read_bytes()
         except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
             raise SessionMigrateError("cannot build Cursor store database") from exc
+        finally:
+            if db is not None:
+                db.close()
     if not data or len(data) > MAX_NATIVE_BYTES:
         raise SessionMigrateError("generated Cursor store violates the database size limit")
     return data

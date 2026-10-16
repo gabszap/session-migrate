@@ -147,43 +147,70 @@ def encode_jsonl(records: Iterable[Mapping[str, Any]]) -> bytes:
 
 
 def write_private_atomic(path: Path, data: bytes) -> tuple[int, int]:
-    """Write mode-0600 bytes atomically without silently replacing a session."""
+    """Write bytes atomically without silently replacing an existing target."""
 
     path = Path(os.path.abspath(path.expanduser()))
+
     if os.path.lexists(path):
         raise JsonlError(f"refusing to overwrite existing target: {path}")
+
     try:
         _mkdir_private(path.parent)
+
         descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
         )
+
         temporary_path = Path(temporary_name)
-        published_identity: tuple[int, int] | None = None
+
         try:
-            os.fchmod(descriptor, 0o600)
+            # Close the raw descriptor through fdopen before doing any
+            # filesystem operation on Windows.
             with os.fdopen(descriptor, "wb") as stream:
                 stream.write(data)
                 stream.flush()
                 os.fsync(stream.fileno())
-            # A hard link is an atomic create-if-absent operation. Unlike an
-            # exists() check followed by replace(), it cannot clobber a file
-            # created by another process during this write.
-            try:
-                os.link(temporary_path, path)
-            except FileExistsError as exc:
-                raise JsonlError(f"refusing to overwrite existing target: {path}") from exc
-            temporary_path.unlink()
+
+            if os.name == "nt":
+                # Windows: rename fails if the destination already exists,
+                # giving us create-if-absent semantics without hard links.
+                try:
+                    os.rename(temporary_path, path)
+                except FileExistsError as exc:
+                    raise JsonlError(f"refusing to overwrite existing target: {path}") from exc
+            else:
+                # POSIX: hard link provides atomic create-if-absent semantics.
+                try:
+                    os.link(temporary_path, path)
+                except FileExistsError as exc:
+                    raise JsonlError(f"refusing to overwrite existing target: {path}") from exc
+
+                temporary_path.unlink()
+
             target_stat = path.lstat()
             published_identity = (target_stat.st_dev, target_stat.st_ino)
-            _fsync_directory(path.parent)
+
+            # Directory fsync is useful on POSIX, but is not supported
+            # consistently on Windows.
+            if os.name != "nt":
+                _fsync_directory(path.parent)
+
             return published_identity
-        except BaseException:
+
+        except JsonlError:
             temporary_path.unlink(missing_ok=True)
-            if published_identity is not None:
-                _unlink_if_same_file(path, published_identity)
             raise
+
+        except BaseException:
+            # The temporary file should already be closed here.
+            temporary_path.unlink(missing_ok=True)
+            raise
+
     except JsonlError:
         raise
+
     except OSError as exc:
         raise JsonlError(f"cannot write target session {path}: {exc.strerror or exc}") from exc
 
@@ -205,6 +232,8 @@ def _mkdir_private(path: Path) -> None:
 
 
 def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
         os.fsync(descriptor)

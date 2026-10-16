@@ -602,14 +602,26 @@ def database_snapshot(path: Path) -> HermesDatabaseSnapshot:
     with tempfile.TemporaryDirectory(prefix="session-migrate-hermes-snapshot-") as directory:
         target = Path(directory) / HERMES_STATE_FILENAME
         uri = f"file:{quote(str(source), safe='/')}?mode=ro"
+        origin = None
+        destination = None
         try:
-            with sqlite3.connect(uri, uri=True, timeout=5) as origin:
-                origin.execute("PRAGMA trusted_schema=OFF")
-                with sqlite3.connect(target) as destination:
-                    origin.backup(destination)
+            origin = sqlite3.connect(uri, uri=True, timeout=5)
+            origin.execute("PRAGMA trusted_schema=OFF")
+            destination = sqlite3.connect(target)
+            origin.backup(destination)
+            destination.commit()
+            origin.close()
+            origin = None
+            destination.close()
+            destination = None
             data = target.read_bytes()
         except (OSError, sqlite3.Error) as exc:
             raise JsonlError("cannot make a consistent Hermes database snapshot") from exc
+        finally:
+            if origin is not None:
+                origin.close()
+            if destination is not None:
+                destination.close()
     if not data or len(data) > MAX_DATABASE_BYTES:
         raise JsonlError("Hermes database snapshot violates the input size limit")
     return HermesDatabaseSnapshot(

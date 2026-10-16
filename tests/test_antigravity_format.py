@@ -315,8 +315,9 @@ def test_install_is_private_transactional_and_collision_safe(
         title="Installed fixture",
         target_home=target_home,
     )
-    assert stat.S_IMODE(installed.conversation_path.stat().st_mode) == 0o600
-    assert stat.S_IMODE(installed.summaries_path.stat().st_mode) == 0o600
+    expected_mode = 0o666 if os.name == "nt" else 0o600
+    assert stat.S_IMODE(installed.conversation_path.stat().st_mode) == expected_mode
+    assert stat.S_IMODE(installed.summaries_path.stat().st_mode) == expected_mode
     parsed = antigravity.parse(installed.conversation_path)
     assert parsed.session_id == TARGET_ID
     assert parsed.title == "Installed fixture"
