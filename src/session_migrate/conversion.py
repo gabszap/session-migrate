@@ -786,16 +786,16 @@ def write_artifact(artifact: ConversionArtifact, *, output_path: Path, manifest_
         ):
             raise JsonlError("conversion artifact changed during installation")
     except BaseException:
+        output_guard = _close_guard(output_guard)
+        manifest_guard = _close_guard(manifest_guard)
         if output_identity is not None:
             _unlink_if_identity_matches(output_path, output_identity)
         if manifest_identity is not None:
             _unlink_if_identity_matches(manifest_path, manifest_identity)
         raise
     finally:
-        if output_guard is not None:
-            os.close(output_guard)
-        if manifest_guard is not None:
-            os.close(manifest_guard)
+        output_guard = _close_guard(output_guard)
+        manifest_guard = _close_guard(manifest_guard)
 
 
 def install_copilot_artifact(
@@ -848,6 +848,8 @@ def install_copilot_artifact(
         if not all(_path_matches_identity(path, identity) for path, identity in identities):
             raise JsonlError("Copilot artifact changed during installation")
     except BaseException:
+        while guards:
+            _close_guard(guards.pop())
         for path, identity in reversed(identities):
             _unlink_if_identity_matches(path, identity)
         if created_directory:
@@ -855,8 +857,8 @@ def install_copilot_artifact(
                 session_directory.rmdir()
         raise
     finally:
-        for descriptor in guards:
-            os.close(descriptor)
+        while guards:
+            _close_guard(guards.pop())
     return events_path, manifest_path
 
 
@@ -925,6 +927,7 @@ def install_antigravity_artifact(
             manifest_bytes,
         )
     except BaseException as exc:
+        reservation_guard = _close_guard(reservation_guard)
         if reservation_identity is not None:
             _unlink_if_identity_matches(manifest_path, reservation_identity)
         if install_succeeded:
@@ -934,8 +937,7 @@ def install_antigravity_artifact(
             ) from exc
         raise
     finally:
-        if reservation_guard is not None:
-            os.close(reservation_guard)
+        reservation_guard = _close_guard(reservation_guard)
     return native_path, manifest_path
 
 
@@ -1000,6 +1002,7 @@ def install_cursor_artifact(
             manifest_bytes,
         )
     except BaseException as exc:
+        reservation_guard = _close_guard(reservation_guard)
         if reservation_identity is not None:
             _unlink_if_identity_matches(manifest_path, reservation_identity)
         if install_succeeded:
@@ -1009,8 +1012,7 @@ def install_cursor_artifact(
             ) from exc
         raise
     finally:
-        if reservation_guard is not None:
-            os.close(reservation_guard)
+        reservation_guard = _close_guard(reservation_guard)
     return native_path, manifest_path
 
 
@@ -1063,6 +1065,8 @@ def install_vibe_artifact(
         if not all(_path_matches_identity(path, identity) for path, identity in identities):
             raise JsonlError("Vibe artifact changed during installation")
     except BaseException:
+        while guards:
+            _close_guard(guards.pop())
         for path, identity in reversed(identities):
             _unlink_if_identity_matches(path, identity)
         if created_directory:
@@ -1070,8 +1074,8 @@ def install_vibe_artifact(
                 session_directory.rmdir()
         raise
     finally:
-        for descriptor in guards:
-            os.close(descriptor)
+        while guards:
+            _close_guard(guards.pop())
     return messages_path, manifest_path
 
 
@@ -1438,6 +1442,7 @@ def _install_shared_database_artifact(
             manifest_bytes,
         )
     except BaseException as exc:
+        reservation_guard = _close_guard(reservation_guard)
         if reservation_identity is not None:
             _unlink_if_identity_matches(manifest_path, reservation_identity)
         if import_succeeded:
@@ -1447,8 +1452,7 @@ def _install_shared_database_artifact(
             ) from exc
         raise
     finally:
-        if reservation_guard is not None:
-            os.close(reservation_guard)
+        reservation_guard = _close_guard(reservation_guard)
     return database, manifest_path
 
 
@@ -1535,6 +1539,10 @@ def install_opencode_artifact(
             manifest_bytes,
         )
     except BaseException as exc:
+        # Windows refuses to delete a file that still has an open handle: release
+        # the guard before the rollback unlink, or that cleanup error replaces the
+        # failure that triggered the rollback.
+        reservation_guard = _close_guard(reservation_guard)
         if reservation_identity is not None:
             _unlink_if_identity_matches(manifest_path, reservation_identity)
         if import_succeeded:
@@ -1627,6 +1635,10 @@ def install_kilo_artifact(
             manifest_bytes,
         )
     except BaseException as exc:
+        # Windows refuses to delete a file that still has an open handle: release
+        # the guard before the rollback unlink, or that cleanup error replaces the
+        # failure that triggered the rollback.
+        reservation_guard = _close_guard(reservation_guard)
         if reservation_identity is not None:
             _unlink_if_identity_matches(manifest_path, reservation_identity)
         if import_succeeded:
@@ -2141,6 +2153,22 @@ def _unlink_if_identity_matches(path: Path, identity: tuple[int, int]) -> None:
         return
     if stat.S_ISREG(current.st_mode) and (current.st_dev, current.st_ino) == identity:
         path.unlink()
+
+
+def _close_guard(descriptor: int | None) -> None:
+    """Close one identity-guard descriptor and hand back ``None``.
+
+    Windows refuses to delete a file while any handle still has it open, so a
+    rollback path must release its own guards *before* unlinking; the guard is
+    therefore closed in the failure path and re-closed (as a no-op) in the
+    surrounding ``finally``.
+    """
+
+    if descriptor is None:
+        return None
+    with suppress(OSError):
+        os.close(descriptor)
+    return None
 
 
 def _open_identity_guard(path: Path, identity: tuple[int, int], *, writable: bool = False) -> int:
