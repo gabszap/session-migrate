@@ -183,6 +183,12 @@ counter plus a `target_title_omitted` warning, and the session appears in the
 native picker without a title. Only the cosmetic field is removed: the envelope,
 its messages, and the record count are unchanged.
 
+The migration manifest is the record of truth here. The CLI's content-free
+stdout summary is built from the conversion result before any target installer
+runs (true for every harness), so a real run reports the omission in
+`<state-home>/session-migrate/manifests/hermes-<id>.json` rather than in the
+printed JSON, and a `--dry-run` — which writes no manifest — reports it nowhere.
+
 The sample is advisory. It runs before the import transaction, which still
 enforces the constraint itself, so a title created by a concurrent writer in
 between fails closed exactly as before, with no partial session.
