@@ -766,7 +766,8 @@ def install_bundle(
 
     parsed = validate_native_bytes(data, session_id)
     root = _absolute_no_follow(target_home)
-    executable = verify_pinned_cli(target_cli, environ=environ)
+    executable, report = _verify_cli(target_cli, environ=environ)
+    install_directory = _install_directory(report)
     database = root / HERMES_STATE_FILENAME
     if os.path.lexists(database):
         _assert_no_collision(database, parsed.session_id)
@@ -774,34 +775,22 @@ def install_bundle(
         return InstalledHermesSession(database, parsed.session_id)
 
     _ensure_private_directory(root)
+    prefix, prelude = _python_invocation(
+        executable, environ=environ, install_directory=install_directory
+    )
+    environment = _subprocess_environment(environ, root)
     if not database.exists():
-        environment = _subprocess_environment(environ, root)
-        try:
-            initialized = subprocess.run(
-                [str(executable), "sessions", "list", "--limit", "1"],
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                timeout=60,
-                check=False,
-                text=True,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise SessionMigrateError("cannot initialize the Hermes state database") from exc
-        if initialized.returncode != 0 or not database.is_file():
-            raise SessionMigrateError("Hermes failed to initialize its state database")
+        _initialize_state_database(prefix, prelude, database, environment)
 
-    interpreter = _script_interpreter(executable)
     helper = (
         "import json,sys; from pathlib import Path; from hermes_state import SessionDB; "
         "value=json.load(sys.stdin); db=SessionDB(db_path=Path(sys.argv[1])); "
         "result=db.import_sessions([value['session']]); db.close(); "
         "print(json.dumps(result,separators=(',',':')))"
     )
-    environment = _subprocess_environment(environ, root)
     try:
         imported = subprocess.run(
-            [str(interpreter), "-c", helper, str(database)],
+            [*prefix, prelude + helper, str(database)],
             env=environment,
             input=data.decode(),
             capture_output=True,
@@ -827,6 +816,38 @@ def install_bundle(
     if loaded.session_id != parsed.session_id:
         raise SessionMigrateError("installed Hermes session failed identity validation")
     return InstalledHermesSession(database, parsed.session_id)
+
+
+def _initialize_state_database(
+    prefix: list[str], prelude: str, database: Path, environment: Mapping[str, str]
+) -> None:
+    """Create a missing store through Hermes's own schema initializer.
+
+    ``hermes sessions list`` no longer creates ``state.db`` on 0.22.2 — a read of
+    an absent store is simply empty — so the store is opened through the native
+    ``SessionDB`` constructor instead, which creates and migrates the file.
+    """
+
+    helper = (
+        "import sys; from pathlib import Path; from hermes_state import SessionDB; "
+        "db=SessionDB(db_path=Path(sys.argv[1])); db.close()"
+    )
+    try:
+        initialized = subprocess.run(
+            [*prefix, prelude + helper, str(database)],
+            env=dict(environment),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=120,
+            check=False,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SessionMigrateError("cannot initialize the Hermes state database") from exc
+    if initialized.returncode != 0 or not database.is_file():
+        detail = initialized.stderr.splitlines()[-1][:500] if initialized.stderr else ""
+        suffix = f": {detail}" if detail else ""
+        raise SessionMigrateError(f"Hermes failed to initialize its state database{suffix}")
 
 
 def _message_events(row: sqlite3.Row, index: int) -> list[Event]:
@@ -1239,6 +1260,115 @@ def _script_interpreter(executable: Path) -> Path:
     return interpreter
 
 
+def _install_directory(report: str) -> Path | None:
+    """Read the ``Install directory:`` line from a ``hermes --version`` report.
+
+    Absent on builds that do not print it; the caller then falls back to the
+    launcher-derived interpreter.
+    """
+
+    for line in report.splitlines():
+        label, separator, value = line.partition(":")
+        if separator and label.strip().lower() == _INSTALL_DIRECTORY_LINE and value.strip():
+            return Path(value.strip())
+    return None
+
+
+def _runtime_command(
+    executable: Path, values: Mapping[str, str]
+) -> list[str] | None:
+    """Ask the launcher for the exact command that runs Hermes in this install.
+
+    ``hermes --print-runtime-command`` prints a JSON argv whose first element is
+    the interpreter.  It is the only portable way to reach the runtime behind a
+    compiled Windows launcher, whose file head is not a shebang.  Older builds
+    do not implement the flag, so a failure returns ``None`` instead of raising.
+    """
+
+    safe_env = _subprocess_environment(values, None)
+    try:
+        completed = subprocess.run(
+            [str(executable), "--print-runtime-command"],
+            env=safe_env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=30,
+            check=False,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    for line in reversed(completed.stdout.splitlines()):
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, list) and value and all(isinstance(item, str) for item in value):
+            return value
+    return None
+
+
+def _bootstrap_root(runtime: list[str]) -> Path | None:
+    """Recover the install root from the launcher's own bootstrap source.
+
+    Used when ``hermes --version`` does not publish an install directory: the
+    runtime command the launcher prints inserts its root into ``sys.path``, so
+    the helper can reuse the very same path the CLI itself imports from.
+    """
+
+    pattern = re.compile(r"sys\.path\.insert\(\s*0\s*,\s*['\"](?P<root>[^'\"]+)['\"]\s*\)")
+    for argument in runtime:
+        match = pattern.search(argument)
+        if match:
+            return Path(match.group("root").replace("\\\\", "\\"))
+    return None
+
+
+def _python_invocation(
+    executable: Path, *, environ: Mapping[str, str] | None, install_directory: Path | None
+) -> tuple[list[str], str]:
+    """Build the argv prefix and prelude that run a helper inside pinned Hermes.
+
+    The command is completed by ``[*prefix, prelude + source, *arguments]``.  The
+    prelude reproduces what the published launcher does for itself before the
+    entry point runs: it clears ``PYTHONHOME``/``PYTHONPATH``/``VIRTUAL_ENV``,
+    puts the install root on ``sys.path`` and then imports ``hermes_bootstrap``,
+    which selects and activates the store's dependency generation.  Store Python
+    alone has no third-party packages, so skipping the bootstrap import makes
+    ``hermes_state`` — and everything it imports — unresolvable.
+
+    ``hermes --print-runtime-command`` is the documented machine boundary for
+    consumers holding the launcher, and it is the only source on a Windows
+    install, whose launcher is a compiled zipapp rather than a ``#!`` script.
+    Builds predating the flag fall back to the launcher's own shebang.
+    """
+
+    values = dict(os.environ if environ is None else environ)
+    runtime = _runtime_command(executable, values)
+    if runtime is not None:
+        interpreter = Path(runtime[0]).expanduser()
+        try:
+            info = interpreter.stat()
+        except OSError as exc:
+            raise SessionMigrateError("Hermes Python interpreter is unavailable") from exc
+        if not stat.S_ISREG(info.st_mode):
+            raise SessionMigrateError("Hermes Python interpreter is not a regular file")
+        root = install_directory or _bootstrap_root(runtime)
+        prelude = [
+            "import os,sys",
+            "os.environ.pop('PYTHONHOME',None)",
+            "os.environ.pop('PYTHONPATH',None)",
+            "os.environ.pop('VIRTUAL_ENV',None)",
+        ]
+        if root is not None:
+            prelude.append(f"sys.path.insert(0,{str(root)!r})")
+        prelude.append("import hermes_bootstrap")
+        return [str(interpreter), "-I", "-c"], "; ".join(prelude) + "; "
+    return [str(_script_interpreter(executable)), "-c"], ""
+
+
 def _subprocess_environment(
     environ: Mapping[str, str] | None, target_home: Path | None
 ) -> dict[str, str]:
@@ -1246,12 +1376,44 @@ def _subprocess_environment(
     result = {
         key: value
         for key, value in values.items()
-        if key in {"HOME", "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TERM"}
+        if key
+        in {
+            "HOME",
+            "PATH",
+            "LANG",
+            "LC_ALL",
+            "LC_CTYPE",
+            "TMPDIR",
+            "TERM",
+            # Windows: the CLI resolves its own home through USERPROFILE (or
+            # HOMEDRIVE/HOMEPATH) and refuses to start without it, and a child
+            # process inherits its loader/search paths from SYSTEMROOT,
+            # PATHEXT and COMSPEC.  Dropping them fails the launcher before
+            # ``--version`` can print anything.
+            "USERPROFILE",
+            "HOMEDRIVE",
+            "HOMEPATH",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "PROGRAMDATA",
+            "SYSTEMROOT",
+            "SYSTEMDRIVE",
+            "WINDIR",
+            "PATHEXT",
+            "COMSPEC",
+            "TEMP",
+            "TMP",
+            "NUMBER_OF_PROCESSORS",
+        }
     }
     result.setdefault("LC_ALL", "C")
     result.setdefault("TERM", "dumb")
     result["NO_COLOR"] = "1"
     result["HERMES_NO_UPDATE_CHECK"] = "1"
+    # A caller that redirects the home through HOME (the pinned native tests)
+    # must reach the same home on Windows, where Path.home() reads USERPROFILE.
+    if result.get("HOME") and not result.get("USERPROFILE"):
+        result["USERPROFILE"] = result["HOME"]
     if target_home is not None:
         result["HERMES_HOME"] = str(target_home)
     return result
