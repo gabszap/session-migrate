@@ -340,7 +340,16 @@ def test_hermes_0222_import_resume_replay_append_and_compaction(tmp_path: Path) 
         assert resumed.returncode == 0, (resumed.stdout, resumed.stderr)
         assert REPLY in resumed.stdout
         assert provider.requests
-        request_text = json.dumps(provider.requests[-1], ensure_ascii=False)
+        # Hermes 0.22.2 names a session that closes without a title, so the
+        # request logged last is the title-generation call; the imported
+        # history replays in the chat request that precedes it.
+        chat_requests = [
+            request
+            for request in provider.requests
+            if not request["messages"][0]["content"].startswith("You name chat sessions")
+        ]
+        assert chat_requests
+        request_text = json.dumps(chat_requests[-1], ensure_ascii=False)
         for marker in (
             "HERMES_IMPORTED_USER_ALPHA",
             ACCENTED,
