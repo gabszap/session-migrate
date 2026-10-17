@@ -657,3 +657,48 @@ def test_v2_tool_error_requires_structured_type(tmp_path):
     tool["state"] = {"status": "error", "input": {}, "error": {"message": "missing type"}}
     with pytest.raises(SessionMigrateError, match="invalid structured error"):
         opencode.validate_native_bytes(json.dumps(value).encode(), value["info"]["id"])
+
+
+def test_router_mirrored_model_lands_on_the_target_provider(tmp_path):
+    """A model mirrored by a router under `oc/` must resolve to OpenCode itself.
+
+    Routers keep their own provider id while serving OpenCode's catalogue under an `oc/`
+    prefix.  OpenCode resolves its next turn from the reference the last message carries,
+    so a session imported with the router's provider id sends free-tier traffic through
+    the router and is refused.
+    """
+
+    session = load_session(FIXTURES / "codex-0.144.4/basic.jsonl", AgentFormat.CODEX)
+    converted = convert_session(
+        session,
+        ConversionOptions(
+            target_format=TargetFormat.OPENCODE,
+            target_cli_version="2.0.23",
+            cwd=tmp_path,
+            model_provider="9router",
+            model="oc/deepseek-v4.1-flash-free",
+        ),
+    )
+    value = json.loads(converted.native_bytes)
+    refs = [value["info"]["model"]] + [m["model"] for m in value["messages"] if "model" in m]
+    assert refs
+    assert {r["providerID"] for r in refs} == {"opencode"}
+    assert {r["id"] for r in refs} == {"deepseek-v4.1-flash-free"}
+
+
+def test_model_reference_without_the_target_namespace_is_untouched(tmp_path):
+    session = load_session(FIXTURES / "codex-0.144.4/basic.jsonl", AgentFormat.CODEX)
+    converted = convert_session(
+        session,
+        ConversionOptions(
+            target_format=TargetFormat.OPENCODE,
+            target_cli_version="2.0.23",
+            cwd=tmp_path,
+            model_provider="fixture",
+            model="test",
+        ),
+    )
+    value = json.loads(converted.native_bytes)
+    refs = [value["info"]["model"]] + [m["model"] for m in value["messages"] if "model" in m]
+    assert {r["providerID"] for r in refs} == {"fixture"}
+    assert {r["id"] for r in refs} == {"test"}

@@ -34,6 +34,24 @@ def _file(part: dict[str, Any]) -> dict[str, Any]:
     return {"data": uri.split(";base64,", 1)[1], "mime": part["mime"], "source": {"type": "inline"}}
 
 
+_OPENCODE_NAMESPACE = "oc/"
+
+
+def _model_ref(model: dict[str, Any]) -> dict[str, str]:
+    """Write a model reference the way the target resolves its next turn.
+
+    Routers such as 9router mirror OpenCode's own catalogue under an ``oc/`` prefix while
+    keeping their own provider id.  OpenCode resolves a turn from the reference its last
+    message carries, and a mirrored free-tier model routed through a router is refused
+    ("free tier can only be used from within OpenCode"), so a reference that names the
+    target's own namespace is written as the target's provider instead.
+    """
+    model_id = str(model.get("modelID") or "unknown")
+    if model_id.startswith(_OPENCODE_NAMESPACE):
+        return {"id": model_id[len(_OPENCODE_NAMESPACE) :], "providerID": "opencode"}
+    return {"id": model_id, "providerID": str(model.get("providerID") or "unknown")}
+
+
 def from_legacy(
     bundle: dict[str, Any],
     dropped: Any,
@@ -48,7 +66,7 @@ def from_legacy(
         info, parts = message["info"], message["parts"]
         common = {"id": info["id"], "time": info["time"]}
         if info["role"] == "user":
-            ref = {"id": info["model"]["modelID"], "providerID": info["model"]["providerID"]}
+            ref = _model_ref(info["model"])
             if any(part["type"] == "compaction" for part in parts):
                 compact.add(info["id"])
                 continue
@@ -61,7 +79,7 @@ def from_legacy(
             if files:
                 native["files"] = files
         else:
-            ref = {"id": info["modelID"], "providerID": info["providerID"]}
+            ref = _model_ref(info)
             if info.get("summary") and info["parentID"] in compact:
                 messages.append(
                     {
