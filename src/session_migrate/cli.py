@@ -18,6 +18,7 @@ from session_migrate.conversion import (
     content_free_result,
     convert_session,
     default_target_home,
+    detect_opencode_version,
     ensure_target_paths_available,
     install_antigravity_artifact,
     install_antigravity_desktop_artifact,
@@ -576,6 +577,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "--target-cli only applies to OpenCode/Kilo/Antigravity/Cursor import "
                     "and transfer, or Hermes import and transfer"
                 )
+            if (
+                target_format == TargetFormat.OPENCODE
+                and args.command != "convert"
+                and not args.target_cli_version
+            ):
+                args.target_cli_version = detect_opencode_version(args.target_cli)
             artifact = convert_session(
                 session,
                 ConversionOptions(
@@ -755,7 +762,10 @@ def _add_conversion_arguments(
     )
     parser.add_argument(
         "--target-cli-version",
-        help="metadata version only; the writer schema remains pinned",
+        help=(
+            "target release; selects legacy or 2.0 transfer schema for OpenCode, "
+            "metadata only for other targets"
+        ),
     )
     parser.add_argument(
         "--target-cli",

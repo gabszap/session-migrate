@@ -82,3 +82,11 @@ harness and installations do not compete for disk space.
 The normal Python job separately runs the deterministic 18 by 18 route oracle.
 The native matrix is the independent acceptance layer: generated files must be
 accepted by code owned and shipped by each harness.
+
+## OpenCode v2 variant
+
+The additional `opencode-v2` job pins `@opencode/cli@2.0.23` and sets
+`SESSION_MIGRATE_TEST_OPENCODE_V2`. Its runner requires every assigned test to
+run without skips, exercising synthetic import/export, collisions, cold reopen
+and localhost-only continuation. Legacy `opencode` remains pinned to 1.17.20.
+See [the v2 transfer contract](opencode-v2.md).

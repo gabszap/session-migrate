@@ -20,7 +20,8 @@ to separately installed host binaries:
 | Codex CLI | `0.144.4` |
 | Pi source and target | `0.80.6` |
 | Oh My Pi source and target | `18.0.5` |
-| OpenCode source and target | `1.17.20` |
+| OpenCode legacy source and target | `1.17.20` |
+| OpenCode v2 transfer adapter | Linux gateway build `2.0.23` |
 | GitHub Copilot CLI source and target | `1.0.70` |
 | Antigravity CLI source and target | `1.1.16` |
 | Antigravity Desktop source and target | `2.18.1` |
@@ -54,6 +55,13 @@ imported prefix and persist a fixed assistant reply. Cursor proves native TUI
 rendering without a model append; Devin proves ACP loading and the vendor-login
 boundary. See
 [Credential-free native client testing](credential-free-native-testing.md).
+
+OpenCode 2.0.x has a separate public-transfer adapter. Its local synthetic tests
+cover native import/export, tool linkage, completed compaction, dry-run and
+identity conflicts; this does not extend the historical eighteen-client corpus
+validation claim. See [OpenCode v2 transfers](opencode-v2.md) for exact scope and
+limitations. No real user transcript migration or native Windows validation has
+been performed for this adapter.
 
 All eighteen formats are sources and targets. Their mappings, native probes, and
 loss keys are specified in [Additional native formats](additional-target-formats.md),
