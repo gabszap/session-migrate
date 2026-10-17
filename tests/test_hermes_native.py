@@ -230,7 +230,7 @@ def test_hermes_0222_import_resume_replay_append_and_compaction(tmp_path: Path) 
                     "    default_model: fixture-model",
                     "    models: [fixture-model]",
                     "    discover_models: false",
-                    "    context_length: 32768",
+                    "    context_length: 131072",
                     "display:",
                     "  interface: cli",
                     "  resume_display: minimal",

@@ -1,19 +1,19 @@
 {
   "schema_version": 1,
-  "fixture_id": "hermes-0.20.6-portable-rich",
+  "fixture_id": "hermes-0.22.2-portable-rich",
   "format": "hermes",
   "case": "portable-rich",
-  "native_session_id": "20260831_195650_1783a3",
+  "native_session_id": "20261016_232030_e61bcd",
   "native_title": "repair-event-window-boundary",
   "native_cwd": "/fixture/work",
   "producer": {
     "name": "Hermes Agent",
-    "version": "0.20.6",
-    "package_or_tag": "v2026.8.27",
-    "source_commit": "5fc308a70719a83cccdbba4c0e39c23f5a8239d5",
+    "version": "0.22.2",
+    "package_or_tag": "v0.22.2",
+    "source_commit": "d923a5eb487a17c0a68801bba9ef0f56c81040a8",
     "platform": "linux-x86_64",
-    "binary_sha256": "060277e4ac1caa59ea6e0c551c7627f8fea0989a4aace9f73cdc1f09425f34c2",
-    "binary_size": 339
+    "binary_sha256": "d2c74d2575bc2cbfd9ddbb7b1d3d110cc68c1897e8dbf4882260d856b26cf104",
+    "binary_size": 341
   },
   "capture": {
     "created_by_exact_cli": true,
@@ -21,15 +21,15 @@
     "scenario_version": 1,
     "provider_kind": "loopback",
     "model_alias": "loopback/fixture-model",
-    "captured_at": "2026-08-31T23:56:50.214Z",
-    "raw_private_sha256": "b8972230461d0ee16157c76bdf396b16e4790f4665669058b53b5f1985d2917a"
+    "captured_at": "2026-10-17T02:20:47.056Z",
+    "raw_private_sha256": "67a441604dc92163835212e2de9cf61f63a2b28010eebdd4d05bc31802919d54"
   },
   "artifacts": [
     {
       "path": "native/state.db",
       "media_type": "application/vnd.sqlite3",
-      "size": 233472,
-      "sha256": "a69f874435820bbbcb7b1fcd4dbe188e326da4781dc06eaeda600f2162271bdf",
+      "size": 282624,
+      "sha256": "d58ca150d627941f2564fab7aca1ee7c445b08dfe86eb0ef7046d64ba892942a",
       "mode": "0600",
       "role": "transcript"
     }
@@ -105,7 +105,7 @@
   "sanitization": {
     "required": true,
     "sanitizer": "scripts/native-corpus/sanitize-hermes.py",
-    "sanitizer_git_sha": "f1aea85097a7a2bf163875c3c51d1e48fc7d2da1",
+    "sanitizer_git_sha": "de7f5c1549118436cb2c74f1770c73a97a2ccf11",
     "mutations": [
       {
         "selector": "message path",
@@ -118,6 +118,11 @@
         "count": 1
       },
       {
+        "selector": "session profile_name",
+        "category": "text",
+        "count": 1
+      },
+      {
         "selector": "session system_prompt",
         "category": "text",
         "count": 1
@@ -126,18 +131,23 @@
         "selector": "session system_prompt_hash",
         "category": "text",
         "count": 1
+      },
+      {
+        "selector": "session tool_names",
+        "category": "text",
+        "count": 1
       }
     ],
     "secret_scan": "pass",
     "content_review": "pass",
-    "sanitized_artifact_set_sha256": "3383052e838f767093cbcf11ec4cdb9eef555e154e46d7f9d09c65538f3731e5",
+    "sanitized_artifact_set_sha256": "5a1f160f7bf1092b55666817fd34c2309a0af73fedba389ae24872b052643b3d",
     "reloaded_by_exact_cli": true,
-    "reloaded_version": "0.20.6",
-    "reloaded_binary_sha256": "060277e4ac1caa59ea6e0c551c7627f8fea0989a4aace9f73cdc1f09425f34c2"
+    "reloaded_version": "0.22.2",
+    "reloaded_binary_sha256": "d2c74d2575bc2cbfd9ddbb7b1d3d110cc68c1897e8dbf4882260d856b26cf104"
   },
   "expectations": {
     "ir": "expected-ir.jsonl",
-    "ir_sha256": "f5946e883a78571c32bfcd6d5bbbcdd9b9cdab6427255e0b1ba9dbda6f2f4f19",
+    "ir_sha256": "e7fc94e0ac3a95c8a58e491de47013b4467cf6b725acbd2ee42c38dc803672e2",
     "event_counts": {
       "message": 8,
       "tool_call": 2,

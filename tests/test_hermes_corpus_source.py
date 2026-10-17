@@ -20,9 +20,9 @@ from session_migrate.formats import hermes
 from session_migrate.model import EventKind
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "tests/native_corpus/v1/sources/hermes/0.20.6/portable-rich"
+FIXTURE = ROOT / "tests/native_corpus/v1/sources/hermes/0.22.2/portable-rich"
 SCRIPT = ROOT / "scripts/native-corpus/sanitize-hermes.py"
-SESSION_ID = "20260831_195650_1783a3"
+SESSION_ID = "20261016_232030_e61bcd"
 FOLLOWUP = "HERMES_CORPUS_COLD_RELOAD_FOLLOWUP_7319"
 REPLY = "HERMES_CORPUS_COLD_RELOAD_REPLY_7319"
 
@@ -277,7 +277,7 @@ def test_hermes_fixture_cold_reloads_and_continues_in_exact_client(tmp_path: Pat
                     "    default_model: fixture-model",
                     "    models: [fixture-model]",
                     "    discover_models: false",
-                    "    context_length: 32768",
+                    "    context_length: 131072",
                     "display:",
                     "  interface: cli",
                     "  resume_display: minimal",

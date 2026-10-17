@@ -59,7 +59,7 @@
     },
     {
       "format": "hermes",
-      "fixture_dir": "sources/hermes/0.20.6/portable-rich",
+      "fixture_dir": "sources/hermes/0.22.2/portable-rich",
       "primary": true
     },
     {

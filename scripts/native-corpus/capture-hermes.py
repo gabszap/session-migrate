@@ -29,10 +29,10 @@ SOURCE_COMMIT = "d923a5eb487a17c0a68801bba9ef0f56c81040a8"
 # rather than per-release.  A capture on a new install must re-record both
 # values here (the defaults below are the wrapper recorded on POSIX for the
 # previous pin and will not match another tree).
-BINARY_BYTES = int(os.environ.get("SESSION_MIGRATE_HERMES_WRAPPER_BYTES", "339"))
+BINARY_BYTES = int(os.environ.get("SESSION_MIGRATE_HERMES_WRAPPER_BYTES", "341"))
 BINARY_SHA256 = os.environ.get(
     "SESSION_MIGRATE_HERMES_WRAPPER_SHA256",
-    "060277e4ac1caa59ea6e0c551c7627f8fea0989a4aace9f73cdc1f09425f34c2",
+    "d2c74d2575bc2cbfd9ddbb7b1d3d110cc68c1897e8dbf4882260d856b26cf104",
 )
 
 
@@ -292,7 +292,7 @@ def write_config(home: Path, port: int) -> None:
                 "    default_model: fixture-model",
                 "    models: [fixture-model]",
                 "    discover_models: false",
-                "    context_length: 32768",
+                "    context_length: 131072",
                 "display:",
                 "  interface: cli",
                 "  resume_display: minimal",
