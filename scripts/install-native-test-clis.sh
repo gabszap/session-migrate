@@ -184,6 +184,15 @@ if want hermes; then
     "$hermes_archive"
   mkdir -p "$native_root/hermes"
   tar -xzf "$hermes_archive" --strip-components=1 -C "$native_root/hermes"
+  # The pinned revision resolves its own version from the source git tree, so
+  # the gitless tarball report would be "vunknown"; reconstruct a minimal
+  # checkout carrying the pinned release tag.
+  git -C "$native_root/hermes" init -q
+  git -C "$native_root/hermes" add -A
+  git -C "$native_root/hermes" -c user.name=session-migrate \
+    -c user.email=ci@invalid -c commit.gpgsign=false \
+    commit -q -m "session-migrate: pin hermes agent d923a5eb"
+  git -C "$native_root/hermes" tag v0.22.2
   # Hermes' revision-3 lockfile uses options first supported by uv 0.10
   # and requires Python >= 3.14.
   uvx --from 'uv==0.10.9' uv sync \
