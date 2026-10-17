@@ -1,11 +1,12 @@
-"""Hermes Agent 0.20.6 SQLite session adapter.
+"""Hermes Agent 0.22.2 SQLite session adapter.
 
 Hermes keeps every CLI conversation in ``$HERMES_HOME/state.db`` (normally
-``~/.hermes/state.db``).  A single database contains many sessions, so source
-selection is always the pair ``(state.db, native session id)``.  Target bytes
-use Hermes's own exported-session shape inside a small versioned envelope;
-installation delegates the final transaction to the pinned Hermes
-``SessionDB.import_sessions`` implementation.
+``~/.hermes``; on Windows ``%LOCALAPPDATA%\\hermes``).  A single database
+contains many sessions, so source selection is always the pair ``(state.db,
+native session id)``.  Target bytes use Hermes's own exported-session shape
+inside a small versioned envelope; installation delegates the final
+transaction to the pinned Hermes ``SessionDB.import_sessions`` implementation,
+which is still the native portability boundary in 0.22.2.
 """
 
 from __future__ import annotations
@@ -19,9 +20,10 @@ import shutil
 import sqlite3
 import stat
 import subprocess
+import sys
 import tempfile
 from collections import Counter
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -34,10 +36,18 @@ from session_migrate.formats.common import content_text, portable_data_image, st
 from session_migrate.jsonl import DEFAULT_MAX_RECORDS, DEFAULT_MAX_TOTAL_BYTES
 from session_migrate.model import AgentFormat, Event, EventKind, Provenance, Role, Session
 
-PINNED_HERMES_VERSION = "0.20.6"
-PINNED_HERMES_RELEASE_TAG = "v2026.8.27"
-PINNED_HERMES_SOURCE_COMMIT = "5fc308a70719a83cccdbba4c0e39c23f5a8239d5"
-PINNED_HERMES_SCHEMA_VERSION = 26
+PINNED_HERMES_VERSION = "0.22.2"
+PINNED_HERMES_RELEASE_TAG = "v2026.9.24"
+PINNED_HERMES_SOURCE_COMMIT = "d923a5eb487a17c0a68801bba9ef0f56c81040a8"
+PINNED_HERMES_SCHEMA_VERSION = 31
+# ``SessionDB`` caps one session at 5 MiB on import while Hermes' own web import
+# accepts 25 MiB (``hermes_cli/web_routers/sessions.py``).  A portable session
+# carrying a pasted screenshot (inline base64 image) trips the lower bound: the
+# bundle is valid and the store accepts stores of that size everywhere else, so
+# the installer raises the per-session budget to what the bundle needs — never
+# past the vendor's own ceiling — and reports it as a manifest warning.
+PINNED_HERMES_IMPORT_SESSION_BYTES = 5 * 1024 * 1024
+PINNED_HERMES_IMPORT_CEILING_BYTES = 25 * 1024 * 1024
 HERMES_BUNDLE_SCHEMA = "session-migrate.hermes.v1"
 HERMES_STATE_FILENAME = "state.db"
 MAX_DATABASE_BYTES = 512 * 1024 * 1024
@@ -48,6 +58,10 @@ MAX_JSON_DEPTH = 96
 MAX_JSON_NODES = 1_000_000
 
 _NATIVE_ID = re.compile(r"(?P<date>\d{8})_(?P<time>\d{6})_(?P<suffix>[0-9a-f]{6,8})\Z")
+# 0.22.2 prints build provenance after the release ("· stable · local <sha>"), so the
+# version line is matched on its pinned prefix and every suffix is tolerated.
+_VERSION_LINE = re.compile(r"^Hermes Agent v(?P<version>[^\s(]+) \((?P<release>[^)]+)\)")
+_INSTALL_DIRECTORY_LINE = "install directory"
 _REQUIRED_SESSION_COLUMNS = frozenset(
     {
         "id",
@@ -186,6 +200,7 @@ class ParsedHermesBundle:
     started_at: str
     model: str | None
     messages: tuple[dict[str, Any], ...]
+    session: Mapping[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,20 +243,49 @@ def native_session_id(portable_id: str, timestamp: str) -> str:
     return normalized_session_id(moment.strftime("%Y%m%d_%H%M%S_") + suffix[:6])
 
 
-def hermes_home(home: Path | None = None, *, environ: Mapping[str, str] | None = None) -> Path:
-    """Resolve Hermes's native home without creating it."""
+def hermes_home(
+    home: Path | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+    platform: str | None = None,
+) -> Path:
+    """Resolve Hermes's native home without creating it.
+
+    Mirrors the CLI's own platform default: ``%LOCALAPPDATA%\\hermes`` on
+    Windows (``~/AppData/Local/hermes`` when that variable is unset) and
+    ``~/.hermes`` elsewhere.  ``HERMES_HOME`` wins when it is set.  Resolving a
+    bare ``~/.hermes`` on Windows named a directory the CLI never writes to, so
+    an install landed outside the real store unless the caller exported
+    ``HERMES_HOME`` by hand.
+    """
 
     values = os.environ if environ is None else environ
-    configured = values.get("HERMES_HOME", "").strip()
-    return Path(configured).expanduser() if configured else (home or Path.home()) / ".hermes"
+    configured = str(values.get("HERMES_HOME", "")).strip()
+    if configured:
+        return Path(configured).expanduser()
+    user_home = home or Path.home()
+    if (sys.platform if platform is None else platform) == "win32":
+        local_app_data = str(values.get("LOCALAPPDATA", "")).strip()
+        base = (
+            Path(local_app_data).expanduser() if local_app_data else user_home / "AppData" / "Local"
+        )
+        return base / "hermes"
+    return user_home / ".hermes"
 
 
 def state_database_path(
-    root: Path | None = None, *, environ: Mapping[str, str] | None = None
+    root: Path | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+    platform: str | None = None,
 ) -> Path:
     """Resolve ``state.db`` from an explicit Hermes root or the native default."""
 
-    selected = Path(root).expanduser() if root is not None else hermes_home(environ=environ)
+    selected = (
+        Path(root).expanduser()
+        if root is not None
+        else hermes_home(environ=environ, platform=platform)
+    )
     return selected / HERMES_STATE_FILENAME
 
 
@@ -531,6 +575,7 @@ def validate_native_bytes(data: bytes, session_id: str) -> ParsedHermesBundle:
         started_at=_timestamp(started_epoch),
         model=model,
         messages=tuple(dict(message) for message in messages),
+        session=value["session"],
     )
 
 
@@ -685,9 +730,39 @@ def parse_session(path: Path, session_id: str | None = None) -> Session:
 parse = parse_session
 
 
-def verify_pinned_cli(
+def _cli_report(path: Path, values: Mapping[str, str], *arguments: str) -> str:
+    """Run the pinned launcher and return its stdout, refusing a failed invocation."""
+
+    safe_env = _subprocess_environment(values, None)
+    try:
+        completed = subprocess.run(
+            [str(path), *arguments],
+            env=safe_env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=30,
+            check=False,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SessionMigrateError("cannot query the Hermes version") from exc
+    if completed.returncode != 0:
+        raise SessionMigrateError("cannot query the Hermes version")
+    return completed.stdout
+
+
+def _verify_cli(
     executable: Path | None = None, *, environ: Mapping[str, str] | None = None
-) -> Path:
+) -> tuple[Path, str]:
+    """Resolve the Hermes launcher, prove it is the pinned build, return its report.
+
+    The full ``--version`` report is kept because 0.22.2 publishes the install
+    directory there, which is what locates the Python runtime behind a Windows
+    launcher shim (see :func:`_python_invocation`).
+    """
+
     values = dict(os.environ if environ is None else environ)
     candidate = str(executable) if executable else shutil.which("hermes", path=values.get("PATH"))
     if not candidate:
@@ -699,26 +774,44 @@ def verify_pinned_cli(
         raise SessionMigrateError("cannot inspect the Hermes executable") from exc
     if not stat.S_ISREG(info.st_mode):
         raise SessionMigrateError("Hermes executable is not a regular file")
-    safe_env = _subprocess_environment(values, None)
-    try:
-        completed = subprocess.run(
-            [str(path), "--version"],
-            env=safe_env,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=30,
-            check=False,
-            text=True,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise SessionMigrateError("cannot query the Hermes version") from exc
-    first = completed.stdout.splitlines()[0].strip() if completed.stdout.splitlines() else ""
+    report = _cli_report(path, values, "--version")
+    first = report.splitlines()[0].strip() if report.splitlines() else ""
+    observed = _VERSION_LINE.match(first)
     expected = f"Hermes Agent v{PINNED_HERMES_VERSION} ({PINNED_HERMES_RELEASE_TAG[1:]})"
-    if completed.returncode != 0 or first != expected:
+    if (
+        observed is None
+        or observed.group("version") != PINNED_HERMES_VERSION
+        or observed.group("release") != PINNED_HERMES_RELEASE_TAG[1:]
+    ):
         raise SessionMigrateError(
             f"Hermes version mismatch: expected {expected}, observed {first or '<unavailable>'}"
         )
-    return path
+    return path, report
+
+
+def verify_pinned_cli(
+    executable: Path | None = None, *, environ: Mapping[str, str] | None = None
+) -> Path:
+    return _verify_cli(executable, environ=environ)[0]
+
+
+def measured_session_bytes(session: Mapping[str, Any]) -> int:
+    """Size one bundle session exactly the way the store sizes it.
+
+    ``timings`` is derived from the messages and rebuilt on export, so it does
+    not eat into the budget of the content it describes.
+    """
+
+    measured = {key: value for key, value in session.items() if key != "timings"}
+    return len(json.dumps(measured, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def import_budget_bytes(measured: int) -> int:
+    """Per-session import budget to request for a bundle of ``measured`` bytes."""
+
+    return max(
+        PINNED_HERMES_IMPORT_SESSION_BYTES, min(measured, PINNED_HERMES_IMPORT_CEILING_BYTES)
+    )
 
 
 def install_bundle(
@@ -734,7 +827,8 @@ def install_bundle(
 
     parsed = validate_native_bytes(data, session_id)
     root = _absolute_no_follow(target_home)
-    executable = verify_pinned_cli(target_cli, environ=environ)
+    executable, report = _verify_cli(target_cli, environ=environ)
+    install_directory = _install_directory(report)
     database = root / HERMES_STATE_FILENAME
     if os.path.lexists(database):
         _assert_no_collision(database, parsed.session_id)
@@ -742,59 +836,116 @@ def install_bundle(
         return InstalledHermesSession(database, parsed.session_id)
 
     _ensure_private_directory(root)
+    prefix, prelude = _python_invocation(
+        executable, environ=environ, install_directory=install_directory
+    )
+    environment = _subprocess_environment(environ, root)
     if not database.exists():
-        environment = _subprocess_environment(environ, root)
-        try:
-            initialized = subprocess.run(
-                [str(executable), "sessions", "list", "--limit", "1"],
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                timeout=60,
-                check=False,
-                text=True,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise SessionMigrateError("cannot initialize the Hermes state database") from exc
-        if initialized.returncode != 0 or not database.is_file():
-            raise SessionMigrateError("Hermes failed to initialize its state database")
+        _initialize_state_database(prefix, prelude, database, environment)
 
-    interpreter = _script_interpreter(executable)
     helper = (
         "import json,sys; from pathlib import Path; from hermes_state import SessionDB; "
-        "value=json.load(sys.stdin); db=SessionDB(db_path=Path(sys.argv[1])); "
+        "value=json.loads(sys.stdin.buffer.read()); "
+        "SessionDB._IMPORT_MAX_SESSION_BYTES=max("
+        "SessionDB._IMPORT_MAX_SESSION_BYTES,int(sys.argv[2])); "
+        "db=SessionDB(db_path=Path(sys.argv[1])); "
         "result=db.import_sessions([value['session']]); db.close(); "
         "print(json.dumps(result,separators=(',',':')))"
     )
-    environment = _subprocess_environment(environ, root)
     try:
-        imported = subprocess.run(
-            [str(interpreter), "-c", helper, str(database)],
-            env=environment,
-            input=data.decode(),
-            capture_output=True,
-            timeout=120,
-            check=False,
-            text=True,
+        code, stdout, stderr = _run_helper(
+            prefix,
+            prelude,
+            helper,
+            database=database,
+            payload=data,
+            environment=environment,
+            extra_arguments=[str(import_budget_bytes(measured_session_bytes(parsed.session)))],
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise SessionMigrateError("Hermes session import failed") from exc
-    result = _last_json_object(imported.stdout)
+    result = _last_json_object(stdout)
     if (
-        imported.returncode != 0
+        code != 0
         or result.get("ok") is not True
         or result.get("imported_ids") != [parsed.session_id]
         or result.get("skipped") != 0
     ):
         detail = result.get("errors")
-        if not detail and imported.stderr:
-            detail = imported.stderr.splitlines()[-1][:500]
+        if not detail and stderr:
+            detail = stderr.splitlines()[-1][:500]
         suffix = f": {detail}" if detail else ""
         raise SessionMigrateError(f"Hermes refused the imported session bundle{suffix}")
     loaded = parse_session(database, parsed.session_id)
     if loaded.session_id != parsed.session_id:
         raise SessionMigrateError("installed Hermes session failed identity validation")
     return InstalledHermesSession(database, parsed.session_id)
+
+
+def _initialize_state_database(
+    prefix: list[str], prelude: str, database: Path, environment: Mapping[str, str]
+) -> None:
+    """Create a missing store through Hermes's own schema initializer.
+
+    ``hermes sessions list`` no longer creates ``state.db`` on 0.22.2 — a read of
+    an absent store is simply empty — so the store is opened through the native
+    ``SessionDB`` constructor instead, which creates and migrates the file.
+    """
+
+    helper = (
+        "import sys; from pathlib import Path; from hermes_state import SessionDB; "
+        "db=SessionDB(db_path=Path(sys.argv[1])); db.close()"
+    )
+    try:
+        code, _, stderr = _run_helper(
+            prefix, prelude, helper, database=database, payload=None, environment=environment
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SessionMigrateError("cannot initialize the Hermes state database") from exc
+    if code != 0 or not database.is_file():
+        detail = stderr.splitlines()[-1][:500] if stderr else ""
+        suffix = f": {detail}" if detail else ""
+        raise SessionMigrateError(f"Hermes failed to initialize its state database{suffix}")
+
+
+def _run_helper(
+    prefix: list[str],
+    prelude: str,
+    source: str,
+    *,
+    database: Path,
+    payload: bytes | None,
+    environment: Mapping[str, str],
+    extra_arguments: Sequence[str] = (),
+) -> tuple[int, str, str]:
+    """Run one helper inside the Hermes runtime, moving any payload as bytes.
+
+    The bundle crosses the process boundary as UTF-8 bytes and the helper reads
+    ``sys.stdin.buffer``.  Passing it as text instead encodes it with the
+    *caller's* locale codec while the store's interpreter always decodes UTF-8,
+    so a Windows console whose code page is not UTF-8 replaced every non-ASCII
+    character with U+FFFD inside the target store.  Both directions are decoded
+    explicitly here for the same reason.
+    """
+
+    arguments: dict[str, Any] = {}
+    if payload is None:
+        arguments["stdin"] = subprocess.DEVNULL
+    else:
+        arguments["input"] = payload
+    completed = subprocess.run(
+        [*prefix, prelude + source, str(database), *extra_arguments],
+        env=dict(environment),
+        capture_output=True,
+        timeout=120,
+        check=False,
+        **arguments,
+    )
+    return (
+        completed.returncode,
+        completed.stdout.decode("utf-8", "replace"),
+        completed.stderr.decode("utf-8", "replace"),
+    )
 
 
 def _message_events(row: sqlite3.Row, index: int) -> list[Event]:
@@ -1180,6 +1331,72 @@ def _assert_no_collision(database: Path, session_id: str) -> None:
             raise SessionMigrateError("Hermes session ID already exists; refusing to overwrite it")
 
 
+def title_taken(database: Path, title: str | None) -> bool:
+    """Report whether *title* is already held by a session in this store.
+
+    Hermes keeps ``idx_sessions_title_unique`` (a partial unique index over
+    non-null titles), so a second session cannot reuse one.  The title is
+    cosmetic — Hermes's own importer discards it on conflict — so a caller can
+    install without it rather than lose the whole migration.
+
+    The lookup is advisory: the import transaction still enforces the real
+    constraint.  A missing, unreadable, or concurrently written store reports
+    ``False`` and leaves the decision to that transaction.
+    """
+
+    if not title:
+        return False
+    if not os.path.lexists(database):
+        return False
+    uri = f"file:{quote(str(database), safe='/')}?mode=ro"
+    connection = None
+    try:
+        connection = sqlite3.connect(uri, uri=True, timeout=5)
+        connection.execute("PRAGMA trusted_schema=OFF")
+        row = connection.execute("SELECT 1 FROM sessions WHERE title = ?", (title,)).fetchone()
+    except (OSError, sqlite3.Error):
+        return False
+    finally:
+        if connection is not None:
+            connection.close()
+    return row is not None
+
+
+def without_title(data: bytes) -> bytes:
+    """Return Hermes bundle bytes whose session carries no title.
+
+    Only the title changes: every other field of the validated envelope is
+    re-emitted byte-identically in meaning, and the result is re-validated by
+    the installer before it is used.
+    """
+
+    value = _bundle_object(data)
+    value["session"]["title"] = None
+    return json.dumps(value, separators=(",", ":"), sort_keys=True, ensure_ascii=False).encode()
+
+
+def bundle_title(data: bytes) -> str | None:
+    """Title carried by a Hermes bundle, when it has one."""
+
+    return _safe_text(_bundle_object(data)["session"].get("title"), "Hermes title")
+
+
+def _bundle_object(data: bytes) -> dict[str, Any]:
+    """Strictly parse a bundle envelope without re-running full validation."""
+
+    try:
+        value = json.loads(
+            data,
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as exc:
+        raise SessionMigrateError("generated Hermes bundle is not valid strict UTF-8 JSON") from exc
+    if not isinstance(value, dict) or not isinstance(value.get("session"), dict):
+        raise SessionMigrateError("generated Hermes bundle has no session to adjust")
+    return value
+
+
 def _script_interpreter(executable: Path) -> Path:
     try:
         with executable.open("rb") as stream:
@@ -1207,6 +1424,115 @@ def _script_interpreter(executable: Path) -> Path:
     return interpreter
 
 
+def _install_directory(report: str) -> Path | None:
+    """Read the ``Install directory:`` line from a ``hermes --version`` report.
+
+    Absent on builds that do not print it; the caller then falls back to the
+    launcher-derived interpreter.
+    """
+
+    for line in report.splitlines():
+        label, separator, value = line.partition(":")
+        if separator and label.strip().lower() == _INSTALL_DIRECTORY_LINE and value.strip():
+            return Path(value.strip())
+    return None
+
+
+def _runtime_command(executable: Path, values: Mapping[str, str]) -> list[str] | None:
+    """Ask the launcher for the exact command that runs Hermes in this install.
+
+    ``hermes --print-runtime-command`` prints a JSON argv whose first element is
+    the interpreter.  It is the only portable way to reach the runtime behind a
+    compiled Windows launcher, whose file head is not a shebang.  Older builds
+    do not implement the flag, so a failure returns ``None`` instead of raising.
+    """
+
+    safe_env = _subprocess_environment(values, None)
+    try:
+        completed = subprocess.run(
+            [str(executable), "--print-runtime-command"],
+            env=safe_env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=30,
+            check=False,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    for line in reversed(completed.stdout.splitlines()):
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, list) and value and all(isinstance(item, str) for item in value):
+            return value
+    return None
+
+
+def _bootstrap_root(runtime: list[str]) -> Path | None:
+    """Recover the install root from the launcher's own bootstrap source.
+
+    Used when ``hermes --version`` does not publish an install directory: the
+    runtime command the launcher prints inserts its root into ``sys.path``, so
+    the helper can reuse the very same path the CLI itself imports from.
+    """
+
+    pattern = re.compile(r"sys\.path\.insert\(\s*0\s*,\s*['\"](?P<root>[^'\"]+)['\"]\s*\)")
+    for argument in runtime:
+        match = pattern.search(argument)
+        if match:
+            return Path(match.group("root").replace("\\\\", "\\"))
+    return None
+
+
+def _python_invocation(
+    executable: Path, *, environ: Mapping[str, str] | None, install_directory: Path | None
+) -> tuple[list[str], str]:
+    """Build the argv prefix and prelude that run a helper inside pinned Hermes.
+
+    The command is completed by ``[*prefix, prelude + source, *arguments]``.  The
+    prelude reproduces what the published launcher does for itself before the
+    entry point runs: it clears ``PYTHONHOME``/``PYTHONPATH``/``VIRTUAL_ENV``,
+    puts the install root on ``sys.path`` and then imports ``hermes_bootstrap``,
+    which selects and activates the store's dependency generation.  Store Python
+    alone has no third-party packages, so skipping the bootstrap import makes
+    ``hermes_state`` — and everything it imports — unresolvable.
+
+    ``hermes --print-runtime-command`` is the documented machine boundary for
+    consumers holding the launcher, and it is the only source on a Windows
+    install, whose launcher is a compiled zipapp rather than a ``#!`` script.
+    Builds predating the flag fall back to the launcher's own shebang.
+    """
+
+    values = dict(os.environ if environ is None else environ)
+    runtime = _runtime_command(executable, values)
+    if runtime is not None:
+        interpreter = Path(runtime[0]).expanduser()
+        try:
+            info = interpreter.stat()
+        except OSError as exc:
+            raise SessionMigrateError("Hermes Python interpreter is unavailable") from exc
+        if not stat.S_ISREG(info.st_mode):
+            raise SessionMigrateError("Hermes Python interpreter is not a regular file")
+        root = install_directory or _bootstrap_root(runtime)
+        prelude = [
+            "import os,sys",
+            "os.environ.pop('PYTHONHOME',None)",
+            "os.environ.pop('PYTHONPATH',None)",
+            "os.environ.pop('VIRTUAL_ENV',None)",
+        ]
+        if root is not None:
+            prelude.append(f"sys.path.insert(0,{str(root)!r})")
+        prelude.append("import hermes_bootstrap")
+        return [str(interpreter), "-I", "-X", "utf8", "-c"], "; ".join(prelude) + "; "
+    return [str(_script_interpreter(executable)), "-X", "utf8", "-c"], ""
+
+
 def _subprocess_environment(
     environ: Mapping[str, str] | None, target_home: Path | None
 ) -> dict[str, str]:
@@ -1214,12 +1540,44 @@ def _subprocess_environment(
     result = {
         key: value
         for key, value in values.items()
-        if key in {"HOME", "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TERM"}
+        if key
+        in {
+            "HOME",
+            "PATH",
+            "LANG",
+            "LC_ALL",
+            "LC_CTYPE",
+            "TMPDIR",
+            "TERM",
+            # Windows: the CLI resolves its own home through USERPROFILE (or
+            # HOMEDRIVE/HOMEPATH) and refuses to start without it, and a child
+            # process inherits its loader/search paths from SYSTEMROOT,
+            # PATHEXT and COMSPEC.  Dropping them fails the launcher before
+            # ``--version`` can print anything.
+            "USERPROFILE",
+            "HOMEDRIVE",
+            "HOMEPATH",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "PROGRAMDATA",
+            "SYSTEMROOT",
+            "SYSTEMDRIVE",
+            "WINDIR",
+            "PATHEXT",
+            "COMSPEC",
+            "TEMP",
+            "TMP",
+            "NUMBER_OF_PROCESSORS",
+        }
     }
     result.setdefault("LC_ALL", "C")
     result.setdefault("TERM", "dumb")
     result["NO_COLOR"] = "1"
     result["HERMES_NO_UPDATE_CHECK"] = "1"
+    # A caller that redirects the home through HOME (the pinned native tests)
+    # must reach the same home on Windows, where Path.home() reads USERPROFILE.
+    if result.get("HOME") and not result.get("USERPROFILE"):
+        result["USERPROFILE"] = result["HOME"]
     if target_home is not None:
         result["HERMES_HOME"] = str(target_home)
     return result

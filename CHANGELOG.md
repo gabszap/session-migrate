@@ -4,8 +4,52 @@ All notable changes to `session-migrate` are recorded
 here. Native format compatibility is documented separately in
 [`docs/format-compatibility.md`](docs/format-compatibility.md).
 
-## Unreleased
+## 0.12.1 - 2026-10-16
 
+- Accept the compaction loop Claude Code records when the compact summary is not
+  the boundary's direct child. The declaration is unchanged, but how many
+  attachment records the CLI interleaves varies, so the summary can sit three or
+  four parent hops below its boundary, and `preservedMessages` also names ids
+  from the summarized branch that are no longer on the active path. A readable
+  73 MB transcript with two compactions was refused as `Claude active graph
+  contains an ancestry cycle`; the loop is now validated as declared (the tail
+  walks up to the summary, the summary up to the boundary, every hop already on
+  the walked path) and a declaration that does not close still fails.
+- Import a bundle the target store caps at 5 MiB per session by raising the
+  budget to what the bundle needs — never past the 25 MiB that store's own web
+  import accepts — and reporting `target_import_budget_raised` in the manifest.
+  A session carrying pasted screenshots (inline base64 images) produced a
+  6.88 MB bundle and was refused with `session exceeds the import size limit`,
+  although the store keeps that content.
+
+## 0.12.0 - 2026-10-16
+
+- Resolve the Hermes home the way the CLI does: `HERMES_HOME` when set,
+  otherwise `%LOCALAPPDATA%\hermes` on Windows and `~/.hermes` elsewhere. A bare
+  `~/.hermes` on Windows named a directory the CLI never writes to, so
+  `--to hermes` (and catalog discovery) missed the real store unless the caller
+  exported `HERMES_HOME` by hand.
+- Move the Hermes import bundle across the process boundary as UTF-8 bytes
+  (`sys.stdin.buffer`, explicit stdout/stderr decoding, `-X utf8` child) instead
+  of locale-encoded text. On a Windows console whose code page is not UTF-8 the
+  old path replaced every non-ASCII character in the imported conversation —
+  title and message bodies — with `U+FFFD`.
+- Install a Hermes session untitled instead of refusing the migration when the
+  target store already holds that title: Hermes enforces a partial unique index
+  over non-null titles, and its own importer treats the field as cosmetic. The
+  omission is counted as `title:duplicate_in_target` and reported as a
+  `target_title_omitted` manifest warning.
+- Promote the Hermes Agent adapter to 0.22.2 (tag `v2026.9.24`) and SQLite
+  schema 31, keeping `SessionDB.import_sessions` as the native write boundary.
+- Resolve the 0.22.2 runtime through `hermes --print-runtime-command` and
+  reproduce the launcher's `hermes_bootstrap` prelude, so the installer works
+  with a store Python that ships without third-party packages. The install root
+  comes from `hermes --version` (or the launcher's own bootstrap), and the
+  launcher shebang remains the fallback for builds predating the flag.
+- Fix Hermes installation on Windows: keep the Windows essentials in the
+  sanitized child environment, initialize a missing `state.db` through the
+  native `SessionDB` constructor, and close the manifest identity guard before a
+  rollback unlinks it (`WinError 32`).
 - Add first-class support for Antigravity Desktop (macOS/Electron) 2.18.1
   with bidirectional conversion, SQLite schema adaptation, Hub Summaries
   Protobuf cache synchronization (`agyhub_summaries_proto.pb`), project-scoped

@@ -1,6 +1,6 @@
 # Session migration specification
 
-This is the user-facing contract for `session-migrate` 0.11.0.
+This is the user-facing contract for `session-migrate` 0.12.1.
 
 ## Scope
 
@@ -21,7 +21,7 @@ The migrator reads and writes native sessions for:
 - Grok 1.0.5
 - Kilo Code 7.5.0
 - OpenHands 1.16.0
-- Hermes Agent 0.20.6
+- Hermes Agent 0.22.2
 - MastraCode 0.37.1
 - Devin CLI 3000.6.7
 
@@ -128,7 +128,7 @@ OMP's current fixed-title-slot v3 writer is pinned to 18.0.5. Vibe's writer
 and append-boundary fingerprint are pinned to 2.24.3. Muse,
 Qwen, and Kimi writers are pinned to 0.2.1, 0.22.1, and 0.38.0. Grok, Kilo,
 and OpenHands are pinned to 1.0.5, 7.5.0, and 1.16.0. Hermes, MastraCode, and
-Devin are pinned to 0.20.6, 0.37.1, and 3000.6.7. Installation
+Devin are pinned to 0.22.2, 0.37.1, and 3000.6.7. Installation
 does not invoke Vibe; the exact CLI is exercised by the credential-free native
 resume gate.
 

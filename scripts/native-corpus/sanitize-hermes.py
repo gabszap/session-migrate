@@ -19,6 +19,7 @@ SESSION_FIELDS = frozenset(
         "actual_cost_usd",
         "api_call_count",
         "archived",
+        "auto_archived",
         "billing_base_url",
         "billing_mode",
         "billing_provider",
@@ -30,8 +31,11 @@ SESSION_FIELDS = frozenset(
         "compression_failure_error",
         "compression_fallback_streak",
         "compression_ineffective_count",
+        "compression_overload_streak",
+        "compression_recovery_deadline",
         "cost_source",
         "cost_status",
+        "created_source",
         "cwd",
         "display_name",
         "end_reason",
@@ -69,14 +73,18 @@ SESSION_FIELDS = frozenset(
         "system_prompt",
         "system_prompt_hash",
         "thread_id",
+        "timings",
         "title",
         "title_source",
         "tool_call_count",
+        "tool_names",
+        "transport_profile",
         "user_id",
     }
 )
 MESSAGE_FIELDS = frozenset(
     {
+        "absorbed_message_uids",
         "active",
         "api_content",
         "codex_message_items",
@@ -88,6 +96,7 @@ MESSAGE_FIELDS = frozenset(
         "effect_disposition",
         "finish_reason",
         "id",
+        "message_uid",
         "observed",
         "platform_message_id",
         "reasoning",
@@ -98,6 +107,8 @@ MESSAGE_FIELDS = frozenset(
         "timestamp",
         "token_count",
         "tool_call_id",
+        "tool_call_uid",
+        "tool_call_uids",
         "tool_calls",
         "tool_name",
     }
@@ -122,6 +133,7 @@ PRIVATE_SESSION_FIELDS = (
     "system_prompt",
     "system_prompt_hash",
     "thread_id",
+    "tool_names",
     "user_id",
 )
 PUBLIC_CWD = "/fixture/work"
@@ -139,9 +151,14 @@ class Result:
 
 def _scrub(value: Any, private_cwd: str, mutations: Counter[str]) -> Any:
     if isinstance(value, str):
-        replaced = value.replace(private_cwd, PUBLIC_CWD)
-        if replaced != value:
-            mutations["message path"] += value.count(private_cwd)
+        # On Windows the private cwd contains separators json.dumps also
+        # escapes inside tool_calls arguments; scrub both the plain and the
+        # JSON-escaped variant.
+        escaped = private_cwd.replace("\\", "\\\\")
+        replaced = value.replace(escaped, PUBLIC_CWD)
+        replaced = replaced.replace(private_cwd, PUBLIC_CWD)
+        if value.count(escaped) or value.count(private_cwd):
+            mutations["message path"] += replaced.count(PUBLIC_CWD) - value.count(PUBLIC_CWD)
         return replaced
     if isinstance(value, list):
         return [_scrub(item, private_cwd, mutations) for item in value]

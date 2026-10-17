@@ -1,4 +1,4 @@
-"""Opt-in pinned-source native trajectory for Hermes Agent 0.20.6."""
+"""Opt-in pinned-source native trajectory for Hermes Agent 0.22.2."""
 
 import json
 import os
@@ -17,6 +17,10 @@ from session_migrate.model import AgentFormat, Event, EventKind, Provenance, Rol
 SESSION_ID = "20260830_123456_111111"
 FOLLOWUP = "HERMES_NATIVE_RESUME_FOLLOWUP_ZETA"
 REPLY = "HERMES_NATIVE_RESUME_REPLY_OMEGA"
+# Non-ASCII text travels through the bundle as bytes; a locale-encoded pipe used to
+# replace it with U+FFFD, so every trajectory asserts it survives verbatim.
+TITLE = "Hermes native resume fixture — ação"
+ACCENTED = "ação concluída — sem perdas"
 
 
 class Provider(ThreadingHTTPServer):
@@ -95,14 +99,14 @@ def _source(tmp_path: Path) -> Session:
         started_at="2026-08-30T12:34:56Z",
         cli_version="2.1.209",
         model="fixture-model",
-        title="Hermes native resume fixture",
+        title=TITLE,
         events=(
             Event(
                 EventKind.MESSAGE,
                 Provenance(0, "user"),
                 role=Role.USER,
                 timestamp="2026-08-30T12:34:56Z",
-                text="HERMES_IMPORTED_USER_ALPHA",
+                text=f"HERMES_IMPORTED_USER_ALPHA {ACCENTED}",
             ),
             Event(
                 EventKind.TOOL_CALL,
@@ -159,13 +163,34 @@ def _environment(home: Path, source: Path) -> dict[str, str]:
     for key in ("LANG", "LC_ALL", "LC_CTYPE", "TMPDIR"):
         if os.environ.get(key):
             environment[key] = os.environ[key]
+    # Windows needs its own essentials to load a child process at all, and the
+    # CLI resolves its home through USERPROFILE rather than HOME.
+    for key in (
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "SYSTEMROOT",
+        "SYSTEMDRIVE",
+        "WINDIR",
+        "PATHEXT",
+        "COMSPEC",
+        "TEMP",
+        "TMP",
+        "NUMBER_OF_PROCESSORS",
+    ):
+        if os.environ.get(key):
+            environment[key] = os.environ[key]
+    if not environment.get("USERPROFILE"):
+        environment["USERPROFILE"] = str(home)
     return environment
 
 
-def test_hermes_0206_import_resume_replay_append_and_compaction(tmp_path: Path) -> None:
+def test_hermes_0222_import_resume_replay_append_and_compaction(tmp_path: Path) -> None:
     source_value = os.environ.get("SESSION_MIGRATE_HERMES_SOURCE")
     if not source_value:
-        pytest.skip("set SESSION_MIGRATE_HERMES_SOURCE to the exact v2026.8.27 source checkout")
+        pytest.skip("set SESSION_MIGRATE_HERMES_SOURCE to the exact v2026.9.24 source checkout")
     source = Path(source_value).resolve()
     binary_value = os.environ.get("SESSION_MIGRATE_HERMES_BIN")
     binary = Path(binary_value).resolve() if binary_value else source / ".venv/bin/hermes"
@@ -205,7 +230,7 @@ def test_hermes_0206_import_resume_replay_append_and_compaction(tmp_path: Path) 
                     "    default_model: fixture-model",
                     "    models: [fixture-model]",
                     "    discover_models: false",
-                    "    context_length: 32768",
+                    "    context_length: 131072",
                     "display:",
                     "  interface: cli",
                     "  resume_display: minimal",
@@ -234,7 +259,7 @@ def test_hermes_0206_import_resume_replay_append_and_compaction(tmp_path: Path) 
         )
         assert installed.path == home / "state.db"
         before = hermes.parse_session(installed.path, SESSION_ID)
-        assert before.title == "Hermes native resume fixture"
+        assert before.title == TITLE
         assert before.cwd == work
         assert before.event_counts() == {
             "compaction": 1,
@@ -315,9 +340,19 @@ def test_hermes_0206_import_resume_replay_append_and_compaction(tmp_path: Path) 
         assert resumed.returncode == 0, (resumed.stdout, resumed.stderr)
         assert REPLY in resumed.stdout
         assert provider.requests
-        request_text = json.dumps(provider.requests[-1], ensure_ascii=False)
+        # Hermes 0.22.2 names a session that closes without a title, so the
+        # request logged last is the title-generation call; the imported
+        # history replays in the chat request that precedes it.
+        chat_requests = [
+            request
+            for request in provider.requests
+            if not request["messages"][0]["content"].startswith("You name chat sessions")
+        ]
+        assert chat_requests
+        request_text = json.dumps(chat_requests[-1], ensure_ascii=False)
         for marker in (
             "HERMES_IMPORTED_USER_ALPHA",
+            ACCENTED,
             "call_hermes_native",
             "HERMES_IMPORTED_TOOL_GAMMA",
             "HERMES_IMPORTED_SUMMARY_DELTA",

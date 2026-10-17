@@ -1,6 +1,7 @@
 import json
 import os
 import sqlite3
+import subprocess
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -100,7 +101,7 @@ def _portable_session(tmp_path: Path) -> Session:
     )
 
 
-def _create_store(path: Path, *, schema_version: int = 26) -> sqlite3.Connection:
+def _create_store(path: Path, *, schema_version: int = 31) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(path)
     db.executescript(
@@ -312,7 +313,15 @@ def test_hermes_root_and_state_database_resolution(tmp_path: Path) -> None:
     assert hermes.state_database_path(environ={"HERMES_HOME": str(configured)}) == (
         configured / "state.db"
     )
-    assert hermes.hermes_home(user_home, environ={}) == user_home / ".hermes"
+    # The platform default follows the CLI: %LOCALAPPDATA%\hermes on Windows,
+    # ~/.hermes elsewhere (see test_hermes_home_matches_the_native_cli_platform_default).
+    assert hermes.hermes_home(user_home, environ={}, platform="linux") == user_home / ".hermes"
+    assert (
+        hermes.hermes_home(
+            user_home, environ={"LOCALAPPDATA": str(tmp_path / "local-app-data")}, platform="win32"
+        )
+        == tmp_path / "local-app-data" / "hermes"
+    )
 
 
 def test_hermes_bundle_round_trip_tools_media_compaction_and_private_omissions(
@@ -562,6 +571,175 @@ def test_hermes_snapshot_includes_uncheckpointed_wal_commit(tmp_path: Path) -> N
         )
 
 
+def test_hermes_bundle_title_helpers_report_and_clear_only_the_title(tmp_path: Path) -> None:
+    session = _portable_session(tmp_path)
+    data, _ = hermes.serialize(
+        session,
+        session_id=NATIVE_ID,
+        cwd=tmp_path,
+        timestamp="2026-08-30T12:34:56Z",
+        title=session.title,
+    )
+    assert hermes.bundle_title(data) == session.title
+
+    adjusted = hermes.without_title(data)
+    parsed = hermes.validate_native_bytes(adjusted, NATIVE_ID)
+    original = hermes.validate_native_bytes(data, NATIVE_ID)
+    assert parsed.title is None
+    assert hermes.bundle_title(adjusted) is None
+    # Only the title changes: the envelope keeps every other field and message.
+    assert parsed.session_id == original.session_id
+    assert parsed.cwd == original.cwd
+    assert parsed.started_at == original.started_at
+    assert parsed.model == original.model
+    assert parsed.messages == original.messages
+    before, after = json.loads(data), json.loads(adjusted)
+    before["session"].pop("title")
+    after["session"].pop("title")
+    assert before == after
+
+
+def test_hermes_title_taken_matches_only_a_stored_non_null_title(tmp_path: Path) -> None:
+    store = tmp_path / "state.db"
+    db = _create_store(store)
+    _insert_session(db, NATIVE_ID, title="Título já usado")
+    db.execute(
+        """INSERT INTO sessions(id,source,started_at,message_count,title,archived,hidden)
+           VALUES (?, 'cli', ?, 0, NULL, 0, 0)""",
+        (SECOND_ID, 1_788_093_296.0),
+    )
+    db.commit()
+    db.close()
+
+    assert hermes.title_taken(store, "Título já usado") is True
+    assert hermes.title_taken(store, "outro título") is False
+    assert hermes.title_taken(store, None) is False
+    assert hermes.title_taken(store, "") is False
+    # A store that does not exist yet cannot hold a title, and an unreadable one
+    # leaves the decision to the import transaction.
+    assert hermes.title_taken(tmp_path / "missing.db", "Título já usado") is False
+
+
+def test_hermes_install_helper_moves_the_bundle_as_utf8_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bundle must cross the process boundary as bytes, never as locale text.
+
+    Encoding it as text uses the *caller's* codec while the store interpreter
+    always decodes UTF-8, so a Windows console whose code page is not UTF-8
+    replaced every non-ASCII character with U+FFFD inside the target store.  The
+    helper reads ``sys.stdin.buffer`` and the caller decodes stdout/stderr
+    explicitly for the same reason.
+    """
+
+    home = tmp_path / "hermes-home"
+    home.mkdir()
+    database = home / "state.db"
+    store = _create_store(database)
+    store.commit()
+    store.close()
+
+    payload = "Instalação — ação".encode()
+    captured: dict[str, object] = {}
+
+    def fake_run(command: list[str], **kwargs: object) -> object:
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(
+            command, 0, stdout=b'{"ok":true,"imported":1,"skipped":0,"imported_ids":[]}', stderr=b""
+        )
+
+    monkeypatch.setattr(hermes.subprocess, "run", fake_run)
+    hermes._run_helper(
+        ["python", "-I", "-X", "utf8", "-c"],
+        "import os,sys; ",
+        "import json,sys; value=json.loads(sys.stdin.buffer.read())",
+        database=database,
+        payload=payload,
+        environment={"HERMES_HOME": str(home)},
+    )
+
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs.get("input") == payload
+    assert isinstance(kwargs.get("input"), bytes)
+    assert kwargs.get("text") is None
+    assert "stdin" not in kwargs
+    command = captured["command"]
+    assert isinstance(command, list)
+    assert "sys.stdin.buffer.read()" in command[-2]
+    assert str(database) == command[-1]
+
+
+def test_hermes_home_matches_the_native_cli_platform_default(tmp_path: Path) -> None:
+    """A bare ``~/.hermes`` is wrong on Windows, where the CLI writes %LOCALAPPDATA%."""
+
+    assert hermes.hermes_home(home=tmp_path, environ={}, platform="linux") == tmp_path / ".hermes"
+    assert (
+        hermes.hermes_home(
+            home=tmp_path, environ={"LOCALAPPDATA": r"C:\fixture\AppData\Local"}, platform="win32"
+        )
+        == Path(r"C:\fixture\AppData\Local") / "hermes"
+    )
+    assert hermes.hermes_home(home=tmp_path, environ={}, platform="win32") == (
+        tmp_path / "AppData" / "Local" / "hermes"
+    )
+    # HERMES_HOME wins everywhere, and a blank value counts as unset.
+    custom = tmp_path / "custom-home"
+    assert (
+        hermes.hermes_home(home=tmp_path, environ={"HERMES_HOME": str(custom)}, platform="win32")
+        == custom
+    )
+    assert (
+        hermes.hermes_home(home=tmp_path, environ={"HERMES_HOME": "   "}, platform="win32")
+        == tmp_path / "AppData" / "Local" / "hermes"
+    )
+    assert (
+        hermes.state_database_path(
+            environ={"LOCALAPPDATA": r"C:\fixture\AppData\Local"}, platform="win32"
+        )
+        == Path(r"C:\fixture\AppData\Local") / "hermes" / "state.db"
+    )
+    assert hermes.state_database_path(root=tmp_path / "explicit", platform="win32") == (
+        tmp_path / "explicit" / "state.db"
+    )
+
+
+def test_hermes_import_budget_covers_a_bundle_the_store_caps_by_default() -> None:
+    """A bundle the store's 5 MiB per-session cap rejects raises the budget instead.
+
+    Hermes caps one session at 5 MiB on import while its own web import accepts
+    25 MiB, so a session carrying pasted screenshots is refused although nothing
+    about it is invalid.  Size the bundle the way the store does, request the
+    smallest budget that fits, and never pass the vendor's own ceiling.
+    """
+
+    assert hermes.import_budget_bytes(0) == hermes.PINNED_HERMES_IMPORT_SESSION_BYTES
+    assert hermes.import_budget_bytes(1024) == hermes.PINNED_HERMES_IMPORT_SESSION_BYTES
+    assert hermes.import_budget_bytes(6 * 1024 * 1024) == 6 * 1024 * 1024
+    assert (
+        hermes.import_budget_bytes(900 * 1024 * 1024) == hermes.PINNED_HERMES_IMPORT_CEILING_BYTES
+    )
+
+    # `timings` is derived on export and never counts against the content budget.
+    session = {
+        "id": "20260830_123456_abcdef",
+        "messages": [{"content": "á"}],
+        "timings": [{"x": "y" * 4096}],
+    }
+    sized = hermes.measured_session_bytes(session)
+    assert sized == len(
+        json.dumps(
+            {"id": "20260830_123456_abcdef", "messages": [{"content": "á"}]},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    assert sized < len(
+        json.dumps(session, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    )
+
+
 def test_hermes_rejects_symlink_and_unsupported_schema(tmp_path: Path) -> None:
     path = _native_store(tmp_path / "native")
     link = tmp_path / "linked.db"
@@ -573,5 +751,5 @@ def test_hermes_rejects_symlink_and_unsupported_schema(tmp_path: Path) -> None:
     db = _create_store(old, schema_version=25)
     db.commit()
     db.close()
-    with pytest.raises(JsonlError, match="expected 26"):
+    with pytest.raises(JsonlError, match="expected 31"):
         hermes.list_sessions(old)

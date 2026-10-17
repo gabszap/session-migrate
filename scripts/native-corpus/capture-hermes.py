@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture an exact Hermes 0.20.6 source trajectory without credentials."""
+"""Capture an exact Hermes 0.22.2 source trajectory without credentials."""
 
 from __future__ import annotations
 
@@ -22,11 +22,18 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 ASSETS = REPO_ROOT / "tests/native_corpus/v1/assets"
 SCENARIO = json.loads((REPO_ROOT / "tests/native_corpus/v1/scenario.json").read_text())
 TITLE = str(SCENARIO["session_title"])
-VERSION = "0.20.6"
-RELEASE = "2026.8.27"
-SOURCE_COMMIT = "5fc308a70719a83cccdbba4c0e39c23f5a8239d5"
-BINARY_BYTES = 339
-BINARY_SHA256 = "060277e4ac1caa59ea6e0c551c7627f8fea0989a4aace9f73cdc1f09425f34c2"
+VERSION = "0.22.2"
+RELEASE = "2026.9.24"
+SOURCE_COMMIT = "d923a5eb487a17c0a68801bba9ef0f56c81040a8"
+# The entry-point wrapper embeds the install root, so its bytes are per-install
+# rather than per-release.  A capture on a new install must re-record both
+# values here (the defaults below are the wrapper recorded on POSIX for the
+# previous pin and will not match another tree).
+BINARY_BYTES = int(os.environ.get("SESSION_MIGRATE_HERMES_WRAPPER_BYTES", "341"))
+BINARY_SHA256 = os.environ.get(
+    "SESSION_MIGRATE_HERMES_WRAPPER_SHA256",
+    "d2c74d2575bc2cbfd9ddbb7b1d3d110cc68c1897e8dbf4882260d856b26cf104",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,7 +244,9 @@ def verify_client(source: Path, binary: Path) -> dict[str, Any]:
         timeout=20,
     )
     expected_line = f"Hermes Agent v{VERSION} ({RELEASE})"
-    if version.returncode or expected_line not in version.stdout:
+    # 0.22.2 appends build provenance ("· stable · local <sha>") to the release.
+    first_line = version.stdout.splitlines()[0].strip() if version.stdout.splitlines() else ""
+    if version.returncode or not first_line.startswith(expected_line):
         raise SystemExit(f"expected {expected_line!r}, got {version.stdout!r}")
     size = binary.stat().st_size
     digest = hashlib.sha256(binary.read_bytes()).hexdigest()
@@ -283,7 +292,7 @@ def write_config(home: Path, port: int) -> None:
                 "    default_model: fixture-model",
                 "    models: [fixture-model]",
                 "    discover_models: false",
-                "    context_length: 32768",
+                "    context_length: 131072",
                 "display:",
                 "  interface: cli",
                 "  resume_display: minimal",

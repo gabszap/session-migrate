@@ -1349,3 +1349,96 @@ def test_busy_oversized_and_unavailable_root_states_are_retained(
         assert catalog.list_sessions(include_missing=True, limit=10)
         assert all(entry.status != "missing" for entry in catalog.list_sessions(limit=10))
         assert catalog.roots()[0].id == root.id
+
+
+HERMES_ID = "20261016_120000_cafe01"
+
+
+def _hermes_store(home: Path) -> None:
+    """Create a schema-31 Hermes store holding one session with two messages."""
+
+    home.mkdir(parents=True, exist_ok=True)
+    database = sqlite3.connect(home / "state.db")
+    database.executescript(
+        """
+        CREATE TABLE schema_version (version INTEGER NOT NULL);
+        CREATE TABLE sessions (
+            id TEXT PRIMARY KEY, source TEXT, model TEXT, model_config TEXT,
+            parent_session_id TEXT, started_at REAL, ended_at REAL, end_reason TEXT,
+            message_count INTEGER, tool_call_count INTEGER, cwd TEXT,
+            billing_provider TEXT, title TEXT, title_source TEXT,
+            last_activity_at REAL, archived INTEGER, hidden INTEGER
+        );
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, role TEXT, content TEXT,
+            tool_call_id TEXT, tool_calls TEXT, tool_name TEXT, timestamp REAL,
+            finish_reason TEXT, reasoning TEXT, reasoning_content TEXT,
+            reasoning_details TEXT, observed INTEGER, _compressed_summary INTEGER,
+            active INTEGER, compacted INTEGER, api_content TEXT, display_kind TEXT,
+            display_metadata TEXT
+        );
+        """
+    )
+    database.execute("INSERT INTO schema_version VALUES (31)")
+    database.execute(
+        """
+        INSERT INTO sessions(id, source, started_at, message_count, cwd, title,
+                             last_activity_at, archived, hidden)
+        VALUES (?, 'cli', ?, 2, ?, 'Windows identity fixture', ?, 0, 0)
+        """,
+        (HERMES_ID, 1_792_200_000.0, str(home), 1_792_200_001.0),
+    )
+    for index, (role, content) in enumerate((("user", "alpha"), ("assistant", "beta"))):
+        database.execute(
+            "INSERT INTO messages(session_id, role, content, timestamp, active, compacted)"
+            " VALUES (?, ?, ?, ?, 1, 0)",
+            (HERMES_ID, role, content, 1_792_200_000.0 + index),
+        )
+    database.commit()
+    database.close()
+
+
+def test_hermes_catalog_accepts_unsigned_windows_stat_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows reports ``st_dev`` as an unsigned 64-bit serial SQLite cannot bind.
+
+    The catalog previously raised ``OverflowError`` mid-scan, marking every
+    SQLite-backed root ``scan_failed``.  Identity is folded into the signed range
+    for storage and for refresh comparison, so a Windows root indexes and its
+    second refresh still reports the row as unchanged.
+    """
+
+    home = tmp_path / "hermes-home"
+    _hermes_store(home)
+    real_snapshot = catalog_module._sqlite_session_snapshot
+
+    def windows_snapshot(path: Path, format_name: str) -> catalog_module._VirtualSnapshot:
+        snapshot = real_snapshot(path, format_name)
+        return catalog_module._VirtualSnapshot(
+            snapshot.device | (1 << 63),
+            snapshot.inode,
+            snapshot.size,
+            snapshot.modified_ns,
+            snapshot.fingerprint,
+        )
+
+    monkeypatch.setattr(catalog_module, "_sqlite_session_snapshot", windows_snapshot)
+    unsigned_device = windows_snapshot(home / "state.db", "hermes").device
+    assert unsigned_device > (1 << 63) - 1
+    with _catalog(tmp_path) as catalog:
+        first = catalog.refresh(hermes_roots=(home,), include_auto=False)
+        assert first.root_errors == 0
+        assert first.statuses == {"candidate": 1}
+        entries = catalog.list_sessions(limit=10)
+        assert [entry.session_id for entry in entries] == [HERMES_ID]
+        assert entries[0].records == 2
+        assert entries[0].title == "Windows identity fixture"
+        stored_device = catalog._connection.execute(
+            "SELECT device FROM sessions WHERE format = 'hermes'"
+        ).fetchone()[0]
+        assert -(1 << 63) <= stored_device <= (1 << 63) - 1
+        assert stored_device & ((1 << 64) - 1) == unsigned_device
+
+        second = catalog.refresh(hermes_roots=(home,), include_auto=False)
+        assert second.unchanged == 1

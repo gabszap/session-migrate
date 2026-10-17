@@ -436,7 +436,23 @@ def _valid_preserved_compaction_back_edge(
     seen: set[str],
     by_uuid: dict[str, JsonlRecord],
 ) -> bool:
-    """Recognize Claude's metadata-declared preserved-segment loop."""
+    """Recognize Claude's metadata-declared preserved-segment loop.
+
+    The declaration is stable, the shape under it is not: the number of records
+    between the boundary and the compact summary varies with the attachment
+    records the CLI interleaves (an environment snapshot, a file read), so the
+    summary is sometimes the boundary's direct child and sometimes three or four
+    parent hops below it.  One 73 MB session with two compactions carried both
+    shapes.  ``preservedMessages`` likewise names ids from the summarized branch
+    that are no longer on the active path, next to the preserved ones.
+
+    Accept the edge when the declaration closes over the walked path: the tail
+    must lead up to the summary, the summary must lead up to the boundary, and
+    every hop must already be on the walked path.  Requiring the summary to be
+    the boundary's direct child, or every declared id to be on the path, refuses
+    readable transcripts — that session raised "ancestry cycle" for exactly this
+    reason.
+    """
 
     metadata = boundary.value.get("compactMetadata")
     if not isinstance(metadata, dict):
@@ -454,30 +470,39 @@ def _valid_preserved_compaction_back_edge(
     assert anchor is not None and head is not None and tail is not None
     assert boundary_uuid is not None
     anchor_record = by_uuid.get(anchor)
-    if (
-        anchor_record is None
-        or anchor_record.value.get("isCompactSummary") is not True
-        or string(anchor_record.value.get("parentUuid")) != boundary_uuid
-    ):
+    if anchor_record is None or anchor_record.value.get("isCompactSummary") is not True:
         return False
     declared = messages.get("allUuids", messages.get("uuids"))
     if not isinstance(declared, list) or not declared:
         return False
     declared_ids = {value for value in declared if isinstance(value, str)}
-    if not {head, tail}.issubset(declared_ids) or not declared_ids.issubset(seen):
+    if not {head, tail}.issubset(declared_ids):
         return False
 
-    cursor: str | None = tail
-    preserved_path: set[str] = set()
-    while cursor and cursor != anchor:
-        if cursor in preserved_path or cursor not in seen:
+    return _walks_up_within_seen(tail, anchor, seen, by_uuid) and _walks_up_within_seen(
+        anchor, boundary_uuid, seen, by_uuid
+    )
+
+
+def _walks_up_within_seen(
+    start: str,
+    target: str,
+    seen: set[str],
+    by_uuid: dict[str, JsonlRecord],
+) -> bool:
+    """Whether ``start`` reaches ``target`` through parents that are already walked."""
+
+    cursor: str | None = start
+    visited: set[str] = set()
+    while cursor and cursor != target:
+        if cursor in visited or cursor not in seen:
             return False
-        preserved_path.add(cursor)
+        visited.add(cursor)
         record = by_uuid.get(cursor)
         if record is None:
             return False
         cursor = string(record.value.get("parentUuid"))
-    return cursor == anchor and head in preserved_path
+    return cursor == target
 
 
 def _events_from_content(record: JsonlRecord, role: Role, content: Any) -> Iterable[Event]:

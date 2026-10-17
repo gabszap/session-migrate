@@ -51,7 +51,7 @@ and sanitization mutations live beside each fixture in `provenance.json`.
 | Cursor | 2026.03.20-44cb435 | vendor | dropped | — | dropped | lossy | rejected | rejected | dropped | dropped |
 | Devin | 3000.6.7 | vendor | preserved | preserved | — | lossy | lossy | lossy | lossy | — |
 | Grok | 1.0.5 | loopback | preserved | — | preserved | lossy | rejected | rejected | — | — |
-| Hermes | 0.20.6 | loopback | preserved | lossy | — | rejected | rejected | rejected | — | — |
+| Hermes | 0.22.2 | loopback | preserved | lossy | — | rejected | rejected | rejected | — | — |
 | Kilo | 7.5.0 | loopback | preserved | preserved | — | lossy | rejected | rejected | — | — |
 | Kimi | 0.38.0 | OpenRouter | preserved | unsupported | — | — | — | — | lossy | — |
 | MastraCode | 0.37.1 | loopback | preserved | preserved | — | rejected | rejected | rejected | — | — |

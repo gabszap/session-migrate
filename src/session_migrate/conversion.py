@@ -808,16 +808,16 @@ def write_artifact(artifact: ConversionArtifact, *, output_path: Path, manifest_
         ):
             raise JsonlError("conversion artifact changed during installation")
     except BaseException:
+        output_guard = _close_guard(output_guard)
+        manifest_guard = _close_guard(manifest_guard)
         if output_identity is not None:
             _unlink_if_identity_matches(output_path, output_identity)
         if manifest_identity is not None:
             _unlink_if_identity_matches(manifest_path, manifest_identity)
         raise
     finally:
-        if output_guard is not None:
-            os.close(output_guard)
-        if manifest_guard is not None:
-            os.close(manifest_guard)
+        output_guard = _close_guard(output_guard)
+        manifest_guard = _close_guard(manifest_guard)
 
 
 def install_copilot_artifact(
@@ -870,6 +870,8 @@ def install_copilot_artifact(
         if not all(_path_matches_identity(path, identity) for path, identity in identities):
             raise JsonlError("Copilot artifact changed during installation")
     except BaseException:
+        while guards:
+            _close_guard(guards.pop())
         for path, identity in reversed(identities):
             _unlink_if_identity_matches(path, identity)
         if created_directory:
@@ -877,8 +879,8 @@ def install_copilot_artifact(
                 session_directory.rmdir()
         raise
     finally:
-        for descriptor in guards:
-            os.close(descriptor)
+        while guards:
+            _close_guard(guards.pop())
     return events_path, manifest_path
 
 
@@ -947,6 +949,7 @@ def install_antigravity_artifact(
             manifest_bytes,
         )
     except BaseException as exc:
+        reservation_guard = _close_guard(reservation_guard)
         if reservation_identity is not None:
             _unlink_if_identity_matches(manifest_path, reservation_identity)
         if install_succeeded:
@@ -956,8 +959,7 @@ def install_antigravity_artifact(
             ) from exc
         raise
     finally:
-        if reservation_guard is not None:
-            os.close(reservation_guard)
+        reservation_guard = _close_guard(reservation_guard)
     return native_path, manifest_path
 
 
@@ -1032,6 +1034,7 @@ def install_antigravity_desktop_artifact(
             manifest_bytes,
         )
     except BaseException as exc:
+        reservation_guard = _close_guard(reservation_guard)
         if reservation_identity is not None:
             _unlink_if_identity_matches(manifest_path, reservation_identity)
         if install_succeeded:
@@ -1041,8 +1044,7 @@ def install_antigravity_desktop_artifact(
             ) from exc
         raise
     finally:
-        if reservation_guard is not None:
-            os.close(reservation_guard)
+        reservation_guard = _close_guard(reservation_guard)
     return native_path, manifest_path
 
 
@@ -1107,6 +1109,7 @@ def install_cursor_artifact(
             manifest_bytes,
         )
     except BaseException as exc:
+        reservation_guard = _close_guard(reservation_guard)
         if reservation_identity is not None:
             _unlink_if_identity_matches(manifest_path, reservation_identity)
         if install_succeeded:
@@ -1116,8 +1119,7 @@ def install_cursor_artifact(
             ) from exc
         raise
     finally:
-        if reservation_guard is not None:
-            os.close(reservation_guard)
+        reservation_guard = _close_guard(reservation_guard)
     return native_path, manifest_path
 
 
@@ -1170,6 +1172,8 @@ def install_vibe_artifact(
         if not all(_path_matches_identity(path, identity) for path, identity in identities):
             raise JsonlError("Vibe artifact changed during installation")
     except BaseException:
+        while guards:
+            _close_guard(guards.pop())
         for path, identity in reversed(identities):
             _unlink_if_identity_matches(path, identity)
         if created_directory:
@@ -1177,8 +1181,8 @@ def install_vibe_artifact(
                 session_directory.rmdir()
         raise
     finally:
-        for descriptor in guards:
-            os.close(descriptor)
+        while guards:
+            _close_guard(guards.pop())
     return messages_path, manifest_path
 
 
@@ -1360,6 +1364,47 @@ def install_openhands_artifact(
     return events_path, manifest_path
 
 
+def _resolve_hermes_title_conflict(
+    artifact: ConversionArtifact, *, target_home: Path
+) -> ConversionArtifact:
+    """Install without the title when the target store already holds it.
+
+    Hermes enforces ``idx_sessions_title_unique``, a partial unique index over
+    non-null session titles, so a second session cannot reuse one; its own
+    importer treats the title as cosmetic and leaves a conflicting session
+    untitled.  The migrator does the same and counts the omission, instead of
+    letting a cosmetic field refuse the whole migration.
+
+    The store is sampled before the import transaction, which still enforces the
+    constraint itself: a title created by a concurrent writer in between fails
+    closed, with no partial write.
+    """
+
+    title = hermes.bundle_title(artifact.native_bytes)
+    if not title:
+        return artifact
+    database = target_home.expanduser() / hermes.HERMES_STATE_FILENAME
+    if not hermes.title_taken(database, title):
+        return artifact
+    dropped = dict(artifact.dropped)
+    dropped["title:duplicate_in_target"] = 1
+    return replace(
+        artifact,
+        native_bytes=hermes.without_title(artifact.native_bytes),
+        dropped=dropped,
+        warnings=(
+            *artifact.warnings,
+            {
+                "code": "target_title_omitted",
+                "title": title,
+                "message": (
+                    "target store already holds this title; the session was installed without one"
+                ),
+            },
+        ),
+    )
+
+
 def install_hermes_artifact(
     artifact: ConversionArtifact,
     *,
@@ -1372,6 +1417,27 @@ def install_hermes_artifact(
 
     if artifact.target_format != TargetFormat.HERMES:
         raise SessionMigrateError("Hermes installation requires a Hermes artifact")
+
+    artifact = _resolve_hermes_title_conflict(artifact, target_home=target_home)
+    measured = hermes.measured_session_bytes(json.loads(artifact.native_bytes)["session"])
+    if measured > hermes.PINNED_HERMES_IMPORT_SESSION_BYTES:
+        artifact = replace(
+            artifact,
+            warnings=(
+                *artifact.warnings,
+                {
+                    "code": "target_import_budget_raised",
+                    "session_bytes": measured,
+                    "default_bytes": hermes.PINNED_HERMES_IMPORT_SESSION_BYTES,
+                    "budget_bytes": hermes.import_budget_bytes(measured),
+                    "message": (
+                        "the target store's per-session import cap was raised to fit this "
+                        "bundle, which carries inline image data; the store's own web import "
+                        "applies the same ceiling"
+                    ),
+                },
+            ),
+        )
 
     def install(simulate: bool) -> Path:
         result = hermes.install_bundle(
@@ -1482,6 +1548,7 @@ def _install_shared_database_artifact(
             manifest_bytes,
         )
     except BaseException as exc:
+        reservation_guard = _close_guard(reservation_guard)
         if reservation_identity is not None:
             _unlink_if_identity_matches(manifest_path, reservation_identity)
         if import_succeeded:
@@ -1491,8 +1558,7 @@ def _install_shared_database_artifact(
             ) from exc
         raise
     finally:
-        if reservation_guard is not None:
-            os.close(reservation_guard)
+        reservation_guard = _close_guard(reservation_guard)
     return database, manifest_path
 
 
@@ -2193,6 +2259,22 @@ def _unlink_if_identity_matches(path: Path, identity: tuple[int, int]) -> None:
         return
     if stat.S_ISREG(current.st_mode) and (current.st_dev, current.st_ino) == identity:
         path.unlink()
+
+
+def _close_guard(descriptor: int | None) -> None:
+    """Close one identity-guard descriptor and hand back ``None``.
+
+    Windows refuses to delete a file while any handle still has it open, so a
+    rollback path must release its own guards *before* unlinking; the guard is
+    therefore closed in the failure path and re-closed (as a no-op) in the
+    surrounding ``finally``.
+    """
+
+    if descriptor is None:
+        return None
+    with suppress(OSError):
+        os.close(descriptor)
+    return None
 
 
 def _open_identity_guard(path: Path, identity: tuple[int, int], *, writable: bool = False) -> int:
