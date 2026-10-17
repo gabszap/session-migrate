@@ -45,6 +45,19 @@ uv tool install session-migrate
 supported. The full command is `session-migrate`; `smigrate` is the shorthand.
 Already installed? Run `uv tool upgrade session-migrate`.
 
+### Install from this fork
+
+This fork carries features that have not shipped upstream yet
+(Antigravity Desktop, Hermes 0.22.2 / schema 31, and OpenCode 2.0 support):
+
+```bash
+uv tool install session-migrate --reinstall --from "git+https://github.com/gabszap/session-migrate"
+```
+
+To pick up new fork commits later, rerun the same command — a git source is
+reinstalled rather than upgraded. On Windows, run it from a native shell
+(PowerShell or `cmd`), not bash/MSYS.
+
 ## Quick start
 
 Inspect any native transcript without printing its conversation:
