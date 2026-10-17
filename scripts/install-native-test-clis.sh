@@ -184,9 +184,10 @@ if want hermes; then
     "$hermes_archive"
   mkdir -p "$native_root/hermes"
   tar -xzf "$hermes_archive" --strip-components=1 -C "$native_root/hermes"
-  # Hermes' revision-3 lockfile uses options first supported by uv 0.10.
+  # Hermes' revision-3 lockfile uses options first supported by uv 0.10
+  # and requires Python >= 3.14.
   uvx --from 'uv==0.10.9' uv sync \
-    --directory "$native_root/hermes" --frozen --no-dev --python 3.13
+    --directory "$native_root/hermes" --frozen --no-dev --python 3.14
   record SESSION_MIGRATE_HERMES_SOURCE "$native_root/hermes"
   record SESSION_MIGRATE_HERMES_BIN "$native_root/hermes/.venv/bin/hermes"
   record SESSION_MIGRATE_HERMES_REVISION d923a5eb487a17c0a68801bba9ef0f56c81040a8

@@ -46,7 +46,7 @@ def _hermes_store(home: Path) -> Path:
                 active INTEGER DEFAULT 1, compacted INTEGER DEFAULT 0,
                 api_content TEXT, display_kind TEXT, display_metadata TEXT
             );
-            INSERT INTO schema_version VALUES (26);
+            INSERT INTO schema_version VALUES (31);
             """
         )
         for offset, (session_id, title) in enumerate(
