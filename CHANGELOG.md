@@ -4,7 +4,7 @@ All notable changes to `session-migrate` are recorded
 here. Native format compatibility is documented separately in
 [`docs/format-compatibility.md`](docs/format-compatibility.md).
 
-## Unreleased
+## 0.13.0 - 2026-10-17
 
 - Add version-aware OpenCode 2.0 public session transfer support, retaining the
   legacy 1.17.20 adapter and native no-overwrite/dry-run controls. Preserve
